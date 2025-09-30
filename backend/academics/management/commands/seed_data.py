@@ -1,0 +1,420 @@
+from django.core.management.base import BaseCommand
+from django.contrib.auth import get_user_model
+from django.utils import timezone
+from faker import Faker
+import random
+from datetime import date, timedelta
+from academics.models import Subject, Stream, Class, TeacherProfile, Student, Competency, ClassSubjectTeacher
+from accounts.models import School
+
+User = get_user_model()
+
+class Command(BaseCommand):
+    help = 'Seed the database with schools, classes, teachers, and students'
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--schools',
+            type=int,
+            default=5,
+            help='Number of schools to create (default: 5)'
+        )
+        parser.add_argument(
+            '--teachers-per-school',
+            type=int,
+            default=30,
+            help='Number of teachers per school (default: 30)'
+        )
+        parser.add_argument(
+            '--students-per-school',
+            type=int,
+            default=900,
+            help='Number of students per school (default: 900)'
+        )
+        parser.add_argument(
+            '--streams-per-school',
+            type=int,
+            default=2,
+            help='Number of streams per school (default: 2)'
+        )
+
+    def handle(self, *args, **options):
+        fake = Faker()
+        Faker.seed(42)  # For reproducible results
+        random.seed(42)
+
+        schools_count = options['schools']
+        teachers_per_school = options['teachers_per_school']
+        students_per_school = options['students_per_school']
+        streams_per_school = options['streams_per_school']
+
+        self.stdout.write(self.style.WARNING('Clearing existing data...'))
+        # Clear data in a specific order to avoid foreign key constraints
+        Student.objects.all().delete()
+        TeacherProfile.objects.all().delete()
+        User.objects.filter(is_superuser=False).delete()
+        Class.objects.all().delete()
+        Stream.objects.all().delete()
+        Subject.objects.all().delete()
+        School.objects.all().delete()
+        Competency.objects.all().delete()
+        self.stdout.write(self.style.SUCCESS('✓ Data cleared.'))
+
+        self.stdout.write(
+            self.style.SUCCESS(f'Starting to seed {schools_count} schools with:')
+        )
+        self.stdout.write(
+            self.style.SUCCESS(f'  - {teachers_per_school} teachers per school')
+        )
+        self.stdout.write(
+            self.style.SUCCESS(f'  - {students_per_school} students per school')
+        )
+        self.stdout.write(
+            self.style.SUCCESS(f'  - Classes per school: {9 * streams_per_school} (9 grades x {streams_per_school} streams)')
+        )
+
+        # Subject names for seeding
+        subject_names = [
+            'Mathematics', 'English', 'Kiswahili', 'Science', 'Social Studies',
+            'Religious Education', 'Physical Education', 'Art', 'Music',
+            'Computer Studies', 'Home Science', 'Agriculture', 'Business Studies'
+        ]
+
+        # Teacher names for variety
+        teacher_first_names = [
+            'John', 'Mary', 'Peter', 'Grace', 'David', 'Sarah', 'Michael', 'Elizabeth',
+            'James', 'Patricia', 'Robert', 'Linda', 'William', 'Barbara', 'Richard',
+            'Susan', 'Joseph', 'Jessica', 'Thomas', 'Nancy', 'Christopher', 'Betty',
+            'Daniel', 'Helen', 'Matthew', 'Sandra', 'Anthony', 'Donna', 'Mark',
+            'Carol', 'Donald', 'Ruth', 'Steven', 'Sharon', 'Paul', 'Michelle',
+            'Andrew', 'Laura', 'Joshua', 'Sarah', 'Kenneth', 'Kimberly', 'Kevin',
+            'Deborah', 'Brian', 'Dorothy', 'George', 'Amy', 'Timothy', 'Angela'
+        ]
+
+        teacher_last_names = [
+            'Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller',
+            'Davis', 'Rodriguez', 'Martinez', 'Hernandez', 'Lopez', 'Gonzalez',
+            'Wilson', 'Anderson', 'Thomas', 'Taylor', 'Moore', 'Jackson', 'Martin',
+            'Lee', 'Perez', 'Thompson', 'White', 'Harris', 'Sanchez', 'Clark',
+            'Ramirez', 'Lewis', 'Robinson', 'Walker', 'Young', 'Allen', 'King',
+            'Wright', 'Scott', 'Torres', 'Nguyen', 'Hill', 'Flores', 'Green'
+        ]
+
+        # Student names
+        student_first_names = [
+            'Aaliyah', 'Aaron', 'Abigail', 'Adam', 'Addison', 'Adrian', 'Aiden',
+            'Alexander', 'Alexis', 'Alice', 'Allison', 'Alyssa', 'Amanda', 'Amelia',
+            'Andrew', 'Angel', 'Anna', 'Anthony', 'Aria', 'Ariana', 'Ashley',
+            'Aubrey', 'Audrey', 'Austin', 'Ava', 'Avery', 'Bailey', 'Bella',
+            'Benjamin', 'Brooklyn', 'Caleb', 'Cameron', 'Carson', 'Carter', 'Charles',
+            'Charlotte', 'Chase', 'Chloe', 'Christian', 'Christopher', 'Claire',
+            'Cody', 'Colton', 'Connor', 'Cooper', 'Daniel', 'David', 'Delilah',
+            'Dylan', 'Eleanor', 'Elena', 'Eli', 'Elijah', 'Elizabeth', 'Ella',
+            'Ellie', 'Emily', 'Emma', 'Ethan', 'Eva', 'Evelyn', 'Faith', 'Gabriel',
+            'Gavin', 'Genesis', 'Grace', 'Hailey', 'Hannah', 'Harper', 'Hayden',
+            'Henry', 'Hunter', 'Ian', 'Isaac', 'Isabella', 'Isabelle', 'Isaiah',
+            'Jack', 'Jackson', 'Jacob', 'Jake', 'James', 'Jasmine', 'Jason', 'Jayden',
+            'Jeremiah', 'Jessica', 'John', 'Jonathan', 'Jordan', 'Joseph', 'Joshua',
+            'Josiah', 'Julia', 'Julian', 'Justin', 'Kaitlyn', 'Katherine', 'Kayla',
+            'Kaylee', 'Kennedy', 'Kevin', 'Khloe', 'Kylie', 'Landon', 'Lauren',
+            'Layla', 'Leah', 'Leo', 'Levi', 'Liam', 'Lillian', 'Lily', 'Logan',
+            'Lucas', 'Lucy', 'Luke', 'Lydia', 'Mackenzie', 'Madelyn', 'Madison',
+            'Makayla', 'Mason', 'Matthew', 'Maya', 'Mia', 'Michael', 'Mila',
+            'Morgan', 'Natalie', 'Nathan', 'Nevaeh', 'Nicholas', 'Noah', 'Nolan',
+            'Olivia', 'Owen', 'Parker', 'Peyton', 'Piper', 'Quinn', 'Reagan',
+            'Riley', 'Robert', 'Ryan', 'Sadie', 'Samantha', 'Samuel', 'Sarah',
+            'Savannah', 'Scarlett', 'Sebastian', 'Serenity', 'Skylar', 'Sofia',
+            'Sophia', 'Sophie', 'Stella', 'Sydney', 'Taylor', 'Trinity', 'Tyler',
+            'Victoria', 'Violet', 'William', 'Wyatt', 'Xavier', 'Zachary', 'Zoe'
+        ]
+
+        student_last_names = [
+            'Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller',
+            'Davis', 'Rodriguez', 'Martinez', 'Hernandez', 'Lopez', 'Gonzalez',
+            'Wilson', 'Anderson', 'Thomas', 'Taylor', 'Moore', 'Jackson', 'Martin',
+            'Lee', 'Perez', 'Thompson', 'White', 'Harris', 'Sanchez', 'Clark',
+            'Ramirez', 'Lewis', 'Robinson', 'Walker', 'Young', 'Allen', 'King',
+            'Wright', 'Scott', 'Torres', 'Nguyen', 'Hill', 'Flores', 'Green',
+            'Adams', 'Nelson', 'Baker', 'Hall', 'Rivera', 'Campbell', 'Mitchell',
+            'Carter', 'Roberts', 'Gomez', 'Phillips', 'Evans', 'Turner', 'Diaz',
+            'Parker', 'Cruz', 'Edwards', 'Collins', 'Reyes', 'Stewart', 'Morris',
+            'Morales', 'Murphy', 'Cook', 'Rogers', 'Gutierrez', 'Ortiz', 'Morgan',
+            'Cooper', 'Peterson', 'Bailey', 'Reed', 'Kelly', 'Howard', 'Ramos',
+            'Kim', 'Cox', 'Ward', 'Richardson', 'Watson', 'Brooks', 'Chavez',
+            'Wood', 'James', 'Bennett', 'Gray', 'Mendoza', 'Ruiz', 'Hughes',
+            'Price', 'Alvarez', 'Castillo', 'Sanders', 'Patel', 'Myers', 'Long',
+            'Ross', 'Foster', 'Jimenez'
+        ]
+
+        # School names
+        school_names = [
+            'Riverside Academy', 'Green Valley High School', 'Central City School',
+            'Mountain View Academy', 'Lakeside High School', 'Sunset Valley School',
+            'Oak Ridge Academy', 'Maple Leaf High School', 'Pine Grove School',
+            'Cedar Hill Academy'
+        ]
+
+        # Create schools (idempotent)
+        schools = []
+        for i in range(schools_count):
+            school_name = school_names[i] if i < len(school_names) else f'School {i+1}'
+            school_code = f'SCH{i+1:03d}'
+            school, created = School.objects.get_or_create(
+                code=school_code,
+                defaults={
+                    'name': school_name,
+                    'address': fake.address(),
+                    'motto': fake.sentence(),
+                    'aim': fake.paragraph(),
+                }
+            )
+            schools.append(school)
+            if created:
+                self.stdout.write(
+                    self.style.SUCCESS(f'Created school: {school.name} ({school.code})')
+                )
+
+        # Create streams for each school
+        streams = []
+        stream_letters = [chr(ord('A') + i) for i in range(streams_per_school)]
+        for school in schools:
+            for stream_name in stream_letters:
+                stream, created = Stream.objects.get_or_create(
+                    name=stream_name,
+                    school=school
+                )
+                streams.append(stream)
+                if created:
+                    self.stdout.write(
+                        self.style.SUCCESS(f'Created stream: {stream.name} for {school.name}')
+                    )
+
+        # Create subjects
+        subjects = []
+        for subject_name in subject_names:
+            # Create subject for each school
+            for school in schools:
+                # Ensure unique code across all schools by prefixing with school code
+                subject_code = f"{school.code}-{subject_name[:3].upper()}"
+                subject, created = Subject.objects.get_or_create(
+                    code=subject_code,
+                    defaults={
+                        'name': subject_name,
+                        'school': school,
+                    }
+                )
+                if created:
+                    subjects.append(subject)
+                    self.stdout.write(
+                        self.style.SUCCESS(f'Created subject: {subject.name} for {school.name}')
+                    )
+
+        # Create classes
+        total_classes_created = 0
+        for school in schools:
+            school_streams = [s for s in streams if s.school == school]
+            school_subjects = list(Subject.objects.filter(school=school))
+
+            # Create classes per school: 9 grades x N streams
+            for grade in range(1, 10):  # Grades 1-9
+                for stream in school_streams:
+                    class_obj, created = Class.objects.get_or_create(
+                        grade_level=str(grade),
+                        stream=stream,
+                        school=school,
+                    )
+
+                    if created:
+                        # Assign subjects to class
+                        class_subjects = random.sample(school_subjects, min(8, len(school_subjects)))
+                        class_obj.subjects.set(class_subjects)
+                        total_classes_created += 1
+                        self.stdout.write(
+                            self.style.SUCCESS(f'Created class: {class_obj.name} for {school.name}')
+                        )
+
+        self.stdout.write(
+            self.style.SUCCESS(f'Total classes created: {total_classes_created}')
+        )
+
+        # Create teachers
+        total_teachers_created = 0
+        for school in schools:
+            # Fetch subjects from DB to include any that existed before this run
+            school_subjects = list(Subject.objects.filter(school=school))
+
+            for i in range(teachers_per_school):
+                # Create user account for teacher
+                first_name = random.choice(teacher_first_names)
+                last_name = random.choice(teacher_last_names)
+                # Add counter to ensure unique usernames
+                username = f"{first_name.lower()}.{last_name.lower()}.{i+1:03d}.{school.code.lower()}"
+
+                user = User.objects.create_user(
+                    username=username,
+                    email=f'{username}@school.com',
+                    password='password123',
+                    first_name=first_name,
+                    last_name=last_name,
+                    role='teacher',
+                    phone=fake.phone_number(),
+                    school=school
+                )
+
+                # Create teacher profile
+                teacher_subjects = random.sample(school_subjects, random.randint(2, 5))
+                subjects_str = ', '.join([s.name for s in teacher_subjects])
+
+                TeacherProfile.objects.create(
+                    user=user,
+                    subjects=subjects_str
+                )
+
+                total_teachers_created += 1
+                if (i + 1) % 10 == 0:
+                    self.stdout.write(
+                        self.style.SUCCESS(f'Created {i+1} teachers for {school.name}')
+                    )
+
+        self.stdout.write(
+            self.style.SUCCESS(f'Total teachers created: {total_teachers_created}')
+        )
+
+        # Assign class teachers and subject teachers per class
+        for school in schools:
+            school_classes = list(Class.objects.filter(school=school).select_related('stream'))
+            school_teachers = list(User.objects.filter(school=school, role='teacher'))
+            teacher_profiles = {tp.user_id: tp for tp in TeacherProfile.objects.filter(user__in=school_teachers)}
+
+            # Class teacher assignment: ensure one class teacher per class
+            # Try to avoid reusing teachers until necessary
+            teacher_index = 0
+            for klass in school_classes:
+                if not school_teachers:
+                    break
+                teacher = school_teachers[teacher_index % len(school_teachers)]
+                teacher_index += 1
+                klass.teacher = teacher
+                klass.save(update_fields=['teacher', 'updated_at'])
+                # Update TeacherProfile.klass
+                tp = teacher_profiles.get(teacher.id)
+                if tp:
+                    tp.klass = klass
+                    tp.save(update_fields=['klass'])
+
+            # Subject teacher assignment
+            for klass in school_classes:
+                for subject in klass.subjects.all():
+                    # Prefer a teacher whose profile includes the subject name
+                    preferred = []
+                    for t in school_teachers:
+                        tp = teacher_profiles.get(t.id)
+                        subs = [s.strip().lower() for s in tp.subjects.split(',')] if tp and tp.subjects else []
+                        if subject.name.lower() in subs:
+                            preferred.append(t)
+                    assigned_teacher = random.choice(preferred) if preferred else random.choice(school_teachers)
+                    ClassSubjectTeacher.objects.get_or_create(
+                        klass=klass,
+                        subject=subject,
+                        defaults={'teacher': assigned_teacher}
+                    )
+
+        # Create students
+        total_students_created = 0
+        for school in schools:
+            school_classes = list(Class.objects.filter(school=school).order_by('grade_level', 'stream__name'))
+            num_classes = len(school_classes)
+            if num_classes == 0:
+                continue
+            per_class = students_per_school // num_classes
+            remainder = students_per_school % num_classes
+
+            admission_counter = 0
+            for idx, klass in enumerate(school_classes):
+                count_for_class = per_class + (1 if idx < remainder else 0)
+                for j in range(count_for_class):
+                    admission_counter += 1
+                    # Create user account for student
+                    first_name = random.choice(student_first_names)
+                    last_name = random.choice(student_last_names)
+                    username = f"{first_name.lower()}.{last_name.lower()}.{admission_counter:03d}.{school.code.lower()}"
+
+                    # Generate random birth date (5-18 years old)
+                    today = date.today()
+                    start_date = today - timedelta(days=18*365)
+                    end_date = today - timedelta(days=5*365)
+                    dob = fake.date_between(start_date=start_date, end_date=end_date)
+
+                    user = User.objects.create_user(
+                        username=username,
+                        email=f'{username}@student.com',
+                        password='password123',
+                        first_name=first_name,
+                        last_name=last_name,
+                        role='student',
+                        phone=fake.phone_number(),
+                        school=school
+                    )
+
+                    # Create student profile
+                    admission_no = f'{school.code}-{admission_counter:04d}'
+
+                    Student.objects.create(
+                        admission_no=admission_no,
+                        name=f'{first_name} {last_name}',
+                        dob=dob,
+                        gender=random.choice(['Male', 'Female']),
+                        guardian_id=f'GUARD{admission_counter:04d}',
+                        klass=klass,
+                        user=user,
+                        phone=fake.phone_number(),
+                        email=f'{username}@student.com',
+                        address=fake.address()
+                    )
+
+                    total_students_created += 1
+                self.stdout.write(
+                    self.style.SUCCESS(f'Class {klass.name}: created {count_for_class} students')
+                )
+
+        self.stdout.write(
+            self.style.SUCCESS(f'Total students created: {total_students_created}')
+        )
+
+        # Create some competencies
+        competencies = [
+            {'code': 'LIT', 'title': 'Literacy', 'description': 'Reading and writing skills'},
+            {'code': 'NUM', 'title': 'Numeracy', 'description': 'Mathematical skills'},
+            {'code': 'SCI', 'title': 'Scientific Thinking', 'description': 'Scientific method and reasoning'},
+            {'code': 'SOC', 'title': 'Social Skills', 'description': 'Communication and collaboration'},
+            {'code': 'CRE', 'title': 'Creative Expression', 'description': 'Artistic and creative abilities'},
+        ]
+
+        for comp_data in competencies:
+            Competency.objects.get_or_create(
+                code=comp_data['code'],
+                defaults={
+                    'title': comp_data['title'],
+                    'description': comp_data['description'],
+                    'level_scale': ['Emerging', 'Developing', 'Proficient', 'Mastered']
+                }
+            )
+
+        self.stdout.write(
+            self.style.SUCCESS('Database seeding completed successfully!')
+        )
+        self.stdout.write(
+            self.style.SUCCESS(f'Summary:')
+        )
+        self.stdout.write(
+            self.style.SUCCESS(f'  - Schools: {schools_count}')
+        )
+        self.stdout.write(
+            self.style.SUCCESS(f'  - Classes: {total_classes_created}')
+        )
+        self.stdout.write(
+            self.style.SUCCESS(f'  - Teachers: {total_teachers_created}')
+        )
+        self.stdout.write(
+            self.style.SUCCESS(f'  - Students: {total_students_created}')
+        )

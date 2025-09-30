@@ -1,0 +1,274 @@
+import React, { useEffect, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import AdminLayout from '../components/AdminLayout'
+import Modal from '../components/Modal'
+import api from '../api'
+
+export default function AdminStudentPayments(){
+  const { id } = useParams()
+  const [payments, setPayments] = useState([])
+  const [invoices, setInvoices] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [showPay, setShowPay] = useState(false)
+  const [paying, setPaying] = useState(false)
+  const [stkStatus, setStkStatus] = useState('idle') // idle | initiating | sent | polling | fetching | success | failed
+  const [payForm, setPayForm] = useState({ invoice: '', amount: '', method: 'mpesa', reference: '', phone: '', attachment: null })
+  const [useRealStk, setUseRealStk] = useState(false) // when true, simulate=false
+  const [payError, setPayError] = useState('')
+
+  useEffect(()=>{
+    let alive = true
+    async function load(){
+      try{
+        setLoading(true)
+        setError('')
+        const [payRes, invRes] = await Promise.all([
+          api.get(`/finance/payments/?invoice__student=${id}`),
+          api.get(`/finance/invoices/?student=${id}`)
+        ])
+        if (!alive) return
+        setPayments(payRes.data)
+        setInvoices(invRes.data)
+      }catch(e){
+        if (!alive) return
+        setError(e?.response?.data?.detail || e?.message || 'Failed to load payments')
+      }finally{
+        alive && setLoading(false)
+      }
+    }
+    load()
+    return ()=>{ alive = false }
+  }, [id])
+
+  function money(n){
+    try { return new Intl.NumberFormat('en-KE', { style:'currency', currency:'KES' }).format(Number(n||0)) } catch { return `Ksh. ${n}` }
+  }
+
+  async function submitPayment(e){
+    e.preventDefault()
+    setPayError('')
+    if (!payForm.invoice) { setPayError('Please select an invoice'); return }
+    const amountNum = parseFloat(payForm.amount)
+    if (!(amountNum > 0)) { setPayError('Enter a valid amount greater than 0'); return }
+    try{
+      setPaying(true)
+      // If Bank and has attachment, send multipart
+      if (payForm.method === 'bank' && payForm.attachment) {
+        const fd = new FormData()
+        fd.append('amount', String(amountNum))
+        fd.append('method', 'bank')
+        fd.append('reference', payForm.reference || '')
+        fd.append('attachment', payForm.attachment)
+        await api.post(`/finance/invoices/${payForm.invoice}/pay/`, fd, { headers: { 'Content-Type': 'multipart/form-data' }})
+      } else {
+        await api.post(`/finance/invoices/${payForm.invoice}/pay/`, {
+          amount: amountNum,
+          method: payForm.method,
+          reference: payForm.reference || ''
+        })
+      }
+      setShowPay(false)
+      setPayForm({ invoice: '', amount: '', method: 'mpesa', reference: '', phone: '', attachment: null })
+      // Refresh lists
+      const [payRes, invRes] = await Promise.all([
+        api.get(`/finance/payments/?invoice__student=${id}`),
+        api.get(`/finance/invoices/?student=${id}`)
+      ])
+      setPayments(payRes.data)
+      setInvoices(invRes.data)
+    } catch(e){
+      setPayError(e?.response?.data?.detail || e?.message || 'Failed to record payment')
+    } finally {
+      setPaying(false)
+    }
+  }
+
+  async function submitStkPush(){
+    setPayError('')
+    if (!payForm.invoice) { setPayError('Please select an invoice'); return }
+    const amountNum = parseFloat(payForm.amount)
+    if (!(amountNum > 0)) { setPayError('Enter a valid amount greater than 0'); return }
+    if (!payForm.phone) { setPayError('Phone number required for STK'); return }
+    try{
+      setPaying(true)
+      setStkStatus('initiating')
+      // baseline count before push
+      const before = await api.get(`/finance/payments/?invoice=${payForm.invoice}`)
+      const baselineCount = Array.isArray(before.data) ? before.data.length : 0
+
+      const { data } = await api.post(`/finance/invoices/${payForm.invoice}/stk_push/`, {
+        phone: payForm.phone,
+        amount: amountNum,
+        simulate: !useRealStk
+      })
+      // Mark as sent
+      setStkStatus('sent')
+      // Begin polling for payment creation
+      setStkStatus('polling')
+      const started = Date.now()
+      let found = false
+      while (Date.now() - started < 60000) { // up to 60s
+        await new Promise(r => setTimeout(r, 3000))
+        const poll = await api.get(`/finance/payments/?invoice=${payForm.invoice}`)
+        const countNow = Array.isArray(poll.data) ? poll.data.length : 0
+        if (countNow > baselineCount) {
+          found = true
+          break
+        }
+      }
+      if (found) {
+        setStkStatus('fetching')
+        // Close modal and refresh lists
+        setShowPay(false)
+        setPayForm({ invoice: '', amount: '', method: 'mpesa', reference: '', phone: '', attachment: null })
+        const [payRes, invRes] = await Promise.all([
+          api.get(`/finance/payments/?invoice__student=${id}`),
+          api.get(`/finance/invoices/?student=${id}`)
+        ])
+        setPayments(payRes.data)
+        setInvoices(invRes.data)
+        setStkStatus('success')
+      } else {
+        setPayError('STK sent, but no confirmation was received in time. It may complete later or has failed.')
+        setStkStatus('failed')
+      }
+    } catch(e){
+      setPayError(e?.response?.data?.detail || e?.message || 'Failed to initiate STK push')
+      setStkStatus('failed')
+    } finally {
+      setPaying(false)
+    }
+  }
+
+  return (
+    <AdminLayout>
+      <div className="space-y-4">
+        <div className="text-sm text-gray-500"><Link to="/admin" className="hover:underline">Admin</Link> / <Link to="/admin/students" className="hover:underline">Students</Link> / <Link to={`/admin/students/${id}`} className="hover:underline">Dashboard</Link> / <span className="text-gray-700">Payments</span></div>
+        <div className="flex items-center justify-between">
+          <h1 className="text-lg font-semibold">Student Payments</h1>
+          <div className="flex items-center gap-3">
+            <button onClick={()=>setShowPay(true)} className="inline-flex items-center gap-2 px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700">
+              <span>➕</span>
+              <span>Make Payment</span>
+            </button>
+            <Link to={`/admin/students/${id}`} className="text-sm text-blue-600 hover:underline">Back to Dashboard</Link>
+          </div>
+        </div>
+        {loading && (<div className="bg-white rounded shadow p-4">Loading...</div>)}
+        {error && (<div className="bg-red-50 text-red-700 p-3 rounded">{error}</div>)}
+        <div className="bg-white rounded shadow p-4">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Amount</th>
+                <th>Method</th>
+                <th>Reference</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payments.map(p => (
+                <tr key={p.id} className="border-t">
+                  <td>{p.id}</td>
+                  <td>{money(p.amount)}</td>
+                  <td className="capitalize">{p.method}</td>
+                  <td>{p.reference || '-'}</td>
+                  <td>{p.created_at?.slice(0,10)}</td>
+                </tr>
+              ))}
+              {payments.length === 0 && !loading && (
+                <tr><td colSpan={5} className="text-center text-gray-500 py-6">No payments found</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Make Payment Modal */}
+        <Modal open={showPay} onClose={()=>setShowPay(false)} title="Make Payment" size="md">
+          <form onSubmit={submitPayment} className="grid gap-3">
+            {payError && (<div className="bg-red-50 text-red-700 text-sm p-2 rounded">{payError}</div>)}
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">Invoice</label>
+              <select className="border p-2 rounded w-full" value={payForm.invoice} onChange={e=>setPayForm({ ...payForm, invoice: e.target.value })} required>
+                <option value="">Select invoice</option>
+                {invoices
+                  .filter(inv => inv.status !== 'paid')
+                  .map(inv => (
+                    <option key={inv.id} value={inv.id}>
+                      #{inv.id} • {money(inv.amount)} • {inv.status}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">Payment Mode</label>
+              <div className="flex items-center gap-4">
+                <label className="inline-flex items-center gap-1 text-sm">
+                  <input type="radio" name="method" value="bank" checked={payForm.method==='bank'} onChange={e=>setPayForm({...payForm, method: e.target.value})} />
+                  <span>Bank</span>
+                </label>
+                <label className="inline-flex items-center gap-1 text-sm">
+                  <input type="radio" name="method" value="mpesa" checked={payForm.method==='mpesa'} onChange={e=>setPayForm({...payForm, method: e.target.value})} />
+                  <span>Mpesa</span>
+                </label>
+              </div>
+            </div>
+            <div className="grid md:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm text-gray-600 mb-1">Amount</label>
+                <input type="number" min="0" step="0.01" className="border p-2 rounded w-full" value={payForm.amount} onChange={e=>setPayForm({ ...payForm, amount: e.target.value })} required />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-600 mb-1">Reference</label>
+                <input className="border p-2 rounded w-full" placeholder={payForm.method==='mpesa' ? 'M-Pesa Code' : 'Bank Slip/Ref'} value={payForm.reference} onChange={e=>setPayForm({ ...payForm, reference: e.target.value })} />
+              </div>
+            </div>
+            {payForm.method==='bank' && (
+              <div>
+                <label className="block text-sm text-gray-600 mb-1">Bank Slip (optional)</label>
+                <input type="file" accept="image/*,application/pdf" onChange={(e)=> setPayForm({ ...payForm, attachment: e.target.files?.[0] || null })} />
+              </div>
+            )}
+            {payForm.method==='mpesa' && (
+              <div>
+                <label className="block text-sm text-gray-600 mb-1">Phone Number (Mpesa)</label>
+                <input className="border p-2 rounded w-full" placeholder="07XXXXXXXX" value={payForm.phone} onChange={e=>setPayForm({ ...payForm, phone: e.target.value })} />
+              </div>
+            )}
+            {payForm.method==='mpesa' && (
+              <label className="inline-flex items-center gap-2 text-sm text-gray-700 mt-1">
+                <input type="checkbox" checked={useRealStk} onChange={e=>setUseRealStk(e.target.checked)} />
+                <span>Use real STK (Daraja)</span>
+              </label>
+            )}
+            <div className="flex justify-end gap-2 mt-2">
+              <button type="button" onClick={()=>setShowPay(false)} className="px-4 py-2 rounded border">Cancel</button>
+              {payForm.method==='mpesa' ? (
+                <>
+                  <button type="button" onClick={submitStkPush} className={`px-4 py-2 rounded text-white disabled:opacity-60 ${stkStatus==='failed' ? 'bg-red-600' : 'bg-sky-600'}`} disabled={paying}>
+                    {stkStatus==='initiating' && 'Sending STK...'}
+                    {stkStatus==='sent' && 'STK Sent'}
+                    {stkStatus==='polling' && 'Waiting for payment...'}
+                    {stkStatus==='fetching' && 'Fetching transaction code...'}
+                    {stkStatus==='success' && 'Payment received!'}
+                    {stkStatus==='failed' && !paying && 'STK Failed — Retry'}
+                    {stkStatus==='idle' && !paying && 'Initiate STK'}
+                    {paying && (stkStatus==='idle' || stkStatus==='failed') && 'Processing...'}
+                  </button>
+                  <button className="bg-green-600 text-white px-4 py-2 rounded disabled:opacity-60" disabled={paying}>{paying ? 'Processing...' : 'Record Manually'}</button>
+                </>
+              ) : (
+                <button className="bg-green-600 text-white px-4 py-2 rounded disabled:opacity-60" disabled={paying}>{paying ? 'Processing...' : 'Submit Payment'}</button>
+              )}
+            </div>
+            {stkStatus==='failed' && (
+              <div className="text-xs text-red-600 mt-1">STK failed or timed out. Please verify the phone number and try again.</div>
+            )}
+          </form>
+        </Modal>
+      </div>
+    </AdminLayout>
+  )
+}

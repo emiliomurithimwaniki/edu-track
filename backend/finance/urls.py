@@ -1,0 +1,18 @@
+from rest_framework.routers import DefaultRouter
+from django.urls import path
+from .views import InvoiceViewSet, PaymentViewSet, FeeCategoryViewSet, ClassFeeViewSet, mpesa_callback, MpesaConfigViewSet
+
+router = DefaultRouter()
+router.register('invoices', InvoiceViewSet)
+router.register('payments', PaymentViewSet)
+router.register('fee-categories', FeeCategoryViewSet)
+router.register('class-fees', ClassFeeViewSet)
+router.register('mpesa-configs', MpesaConfigViewSet, basename='mpesa-configs')
+
+urlpatterns = [
+    # Public callback URL for Daraja STK push
+    path('mpesa/callback/', mpesa_callback, name='mpesa-callback'),
+]
+
+# Include router-generated endpoints
+urlpatterns += router.urls
