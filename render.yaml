@@ -3,8 +3,8 @@ services:
     name: edutrack-backend
     env: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate && python manage.py create_superuser
-    startCommand: gunicorn edutrack.wsgi:application
+    buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput
+    startCommand: bash -lc "python manage.py migrate && gunicorn edutrack.wsgi:application"
     plan: starter
     autoDeploy: true
     envVars:

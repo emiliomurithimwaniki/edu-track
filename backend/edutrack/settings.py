@@ -14,6 +14,15 @@ DEBUG = os.getenv('DEBUG', 'True') == 'True'
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 CSRF_TRUSTED_ORIGINS = [h for h in os.getenv('CSRF_TRUSTED_ORIGINS', 'http://localhost').split(',') if h]
 
+# Render deployments expose a hostname in RENDER_EXTERNAL_HOSTNAME.
+RENDER_HOSTNAME = os.getenv('RENDER_EXTERNAL_HOSTNAME')
+if RENDER_HOSTNAME and RENDER_HOSTNAME not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(RENDER_HOSTNAME)
+
+# Also allow generic Render subdomains unless explicitly overridden
+if '.onrender.com' not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append('.onrender.com')
+
 # Add ngrok domain for temporary public exposure
 NGROK_HOST = "c714cb9ba36c.ngrok-free.app"
 if NGROK_HOST not in ALLOWED_HOSTS:
@@ -27,6 +36,25 @@ if NGROK_ORIGIN not in CSRF_TRUSTED_ORIGINS:
 NGROK_ORIGIN_HTTP = f"http://{NGROK_HOST}"
 if NGROK_ORIGIN_HTTP not in CSRF_TRUSTED_ORIGINS:
     CSRF_TRUSTED_ORIGINS.append(NGROK_ORIGIN_HTTP)
+
+# Build CSRF trusted origins from ALLOWED_HOSTS (https first, then http)
+for host in ALLOWED_HOSTS:
+    host = host.strip()
+    if not host:
+        continue
+    # skip if entry already looks like a scheme URL
+    if host.startswith('http://') or host.startswith('https://'):
+        origin = host
+        if origin not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(origin)
+        continue
+    # handle wildcard/domain entries
+    https_origin = f"https://{host.lstrip('.')}"
+    http_origin = f"http://{host.lstrip('.')}"
+    if https_origin not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(https_origin)
+    if http_origin not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(http_origin)
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -53,6 +81,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -140,6 +169,13 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# When not using S3, serve static files with WhiteNoise's manifest storage
+if not os.getenv('USE_S3', 'False') == 'True':
+    STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+# Respect HTTPS scheme when behind a proxy/load balancer (e.g., Render)
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # S3 storage (DigitalOcean Spaces or AWS S3)
 USE_S3 = os.getenv('USE_S3', 'False') == 'True'

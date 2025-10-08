@@ -100,7 +100,17 @@ export default function LoginPage() {
           nav(`/${me.role}`)
       }
     } catch (e) {
-      setError('Invalid credentials')
+      if (e.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        setError('Invalid credentials');
+      } else if (e.request) {
+        // The request was made but no response was received
+        setError('Network error. Please check your connection or try again later.');
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        setError('An unexpected error occurred.');
+      }
       setFormStep('credentials')
       setIsLoading(false)
     }

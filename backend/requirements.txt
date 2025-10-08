@@ -14,6 +14,7 @@ requests>=2.31.0
 africastalking>=1.2.5
 reportlab>=4.0.0
 phonenumbers>=8.13.0
+whitenoise>=6.7.0
 
 # For results upload parsing
 openpyxl>=3.1.2

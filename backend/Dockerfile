@@ -6,4 +6,6 @@ RUN apt-get update && apt-get install -y build-essential libpq-dev && rm -rf /va
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
+# Collect static files at build time (no DB needed)
+RUN python manage.py collectstatic --noinput
 EXPOSE 8000
