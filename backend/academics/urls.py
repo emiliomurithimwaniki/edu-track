@@ -6,7 +6,9 @@ from .views import (
     ExamViewSet, ExamResultViewSet,
     AcademicYearViewSet, TermViewSet, StreamViewSet,
     LessonPlanViewSet, ClassSubjectTeacherViewSet, SubjectGradingBandViewSet,
-    RoomViewSet, TimetableEntryViewSet
+    RoomViewSet, TimetableEntryViewSet, SubjectComponentViewSet,
+    TimetableTemplateViewSet, PeriodSlotTemplateViewSet, TimetablePlanViewSet, TimetableClassConfigViewSet,
+    ClassSubjectQuotaViewSet, TeacherAvailabilityViewSet, TimetableVersionViewSet
 )
 from .views import SubjectViewSet
 
@@ -18,6 +20,7 @@ router.register('assessments', AssessmentViewSet)
 router.register('attendance', AttendanceViewSet)
 router.register('teachers', TeacherProfileViewSet)
 router.register('subjects', SubjectViewSet)
+router.register('subject_components', SubjectComponentViewSet)
 router.register('lesson_plans', LessonPlanViewSet)
 router.register('exams', ExamViewSet)
 router.register('exam_results', ExamResultViewSet)
@@ -28,6 +31,13 @@ router.register('class_subject_teachers', ClassSubjectTeacherViewSet)
 router.register('subject_grading', SubjectGradingBandViewSet)
 router.register('rooms', RoomViewSet)
 router.register('timetable_entries', TimetableEntryViewSet)
+router.register('timetable/templates', TimetableTemplateViewSet)
+router.register('timetable/periods', PeriodSlotTemplateViewSet)
+router.register('timetable/plans', TimetablePlanViewSet)
+router.register('timetable/class_configs', TimetableClassConfigViewSet)
+router.register('timetable/quotas', ClassSubjectQuotaViewSet)
+router.register('timetable/availability', TeacherAvailabilityViewSet)
+router.register('timetable/versions', TimetableVersionViewSet)
 
 from django.urls import path
 

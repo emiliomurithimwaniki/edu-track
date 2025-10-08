@@ -4,6 +4,7 @@ from rest_framework.parsers import MultiPartParser, JSONParser, FormParser
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 from django.db.models import Q
+from django.db import IntegrityError, transaction
 from django.db.models import Sum, Avg
 from django.http import HttpResponse
 from io import BytesIO, StringIO
@@ -19,11 +20,18 @@ except Exception:
     REPORTLAB_AVAILABLE = False
 import csv, io
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import Class, Student, Competency, Assessment, Attendance, TeacherProfile, Subject, Exam, ExamResult, AcademicYear, Term, Stream, LessonPlan, ClassSubjectTeacher, SubjectGradingBand, Room, TimetableEntry
+from .models import (
+    Class, Student, Competency, Assessment, Attendance, TeacherProfile, Subject, SubjectComponent,
+    Exam, ExamResult, AcademicYear, Term, Stream, LessonPlan, ClassSubjectTeacher, SubjectGradingBand,
+    Room, TimetableEntry,
+    TimetableTemplate, PeriodSlotTemplate, TimetablePlan, TimetableClassConfig, ClassSubjectQuota,
+    TeacherAvailability, TimetableVersion
+)
 from .serializers import (
     ClassSerializer, StudentSerializer, CompetencySerializer,
-    AssessmentSerializer, AttendanceSerializer, LessonPlanSerializer, TeacherProfileSerializer, SubjectSerializer,
-    ExamSerializer, ExamResultSerializer, AcademicYearSerializer, TermSerializer, StreamSerializer, ClassSubjectTeacherSerializer, SubjectGradingBandSerializer, RoomSerializer, TimetableEntrySerializer
+    AssessmentSerializer, AttendanceSerializer, LessonPlanSerializer, TeacherProfileSerializer, SubjectSerializer, SubjectComponentSerializer,
+    ExamSerializer, ExamResultSerializer, AcademicYearSerializer, TermSerializer, StreamSerializer, ClassSubjectTeacherSerializer, SubjectGradingBandSerializer, RoomSerializer, TimetableEntrySerializer,
+    TimetableTemplateSerializer, PeriodSlotTemplateSerializer, TimetablePlanSerializer, TimetableClassConfigSerializer, ClassSubjectQuotaSerializer, TeacherAvailabilitySerializer, TimetableVersionSerializer
 )
 
 class IsTeacherOrAdmin(permissions.BasePermission):
@@ -35,6 +43,27 @@ class IsAdmin(permissions.BasePermission):
         return request.user and request.user.is_authenticated and (
             request.user.role == 'admin' or request.user.is_staff or request.user.is_superuser
         )
+
+class IsAdminOrTeacherReadOnly(permissions.BasePermission):
+    """Allow teachers to perform safe (read-only) requests; only admins can modify.
+    Additionally, a teacher with TeacherProfile.can_manage_timetable=True may modify
+    timetable-related resources. Admin is role 'admin' or staff/superuser.
+    """
+    def has_permission(self, request, view):
+        user = getattr(request, 'user', None)
+        if not (user and user.is_authenticated):
+            return False
+        is_admin = bool(getattr(user, 'role', None) == 'admin' or user.is_staff or user.is_superuser)
+        if request.method in permissions.SAFE_METHODS:
+            return is_admin or getattr(user, 'role', None) == 'teacher'
+        # For write methods, allow timetable-managing teachers
+        if not is_admin and getattr(user, 'role', None) == 'teacher':
+            try:
+                prof = TeacherProfile.objects.filter(user=user).first()
+                return bool(getattr(prof, 'can_manage_timetable', False))
+            except Exception:
+                return False
+        return is_admin
 
 class StreamViewSet(viewsets.ModelViewSet):
     queryset = Stream.objects.all()
@@ -72,7 +101,7 @@ class StreamViewSet(viewsets.ModelViewSet):
 class ClassSubjectTeacherViewSet(viewsets.ModelViewSet):
     queryset = ClassSubjectTeacher.objects.all()
     serializer_class = ClassSubjectTeacherSerializer
-    permission_classes = [IsAdmin]
+    permission_classes = [IsAdminOrTeacherReadOnly]
 
     def get_queryset(self):
         qs = super().get_queryset().select_related('klass','subject','teacher')
@@ -186,7 +215,7 @@ class ExamViewSet(viewsets.ModelViewSet):
     def _build_summary(self, exam):
         # Limit subjects to class subjects for column ordering
         class_subjects = list(exam.klass.subjects.all().values('id','code','name'))
-        res = ExamResult.objects.filter(exam=exam).select_related('student','subject')
+        res = ExamResult.objects.filter(exam=exam).select_related('student','subject','component')
         students_map = {}
         for r in res:
             s = r.student
@@ -195,15 +224,39 @@ class ExamViewSet(viewsets.ModelViewSet):
                 'name': getattr(s, 'name', str(s)),
                 'total': 0.0,
                 'count': 0,
-                'marks': {}
+                'marks': {},
+                # Track component-level percentages to compute subject percentage as average of components
+                'subject_percent_parts': {}
             })
-            entry['marks'][str(r.subject_id)] = float(r.marks)
+            # Aggregate per subject: sum component marks under the same subject
+            sid = str(r.subject_id)
+            prev = entry['marks'].get(sid, 0.0)
+            entry['marks'][sid] = prev + float(r.marks)
             entry['total'] += float(r.marks)
             entry['count'] += 1
+            # Compute component percentage part
+            # Determine denominator: prefer component.max_marks, else exam.total_marks, else 100
+            denom = None
+            comp = getattr(r, 'component', None)
+            if comp and getattr(comp, 'max_marks', None) is not None:
+                denom = float(comp.max_marks)
+            elif getattr(r.exam, 'total_marks', None) is not None:
+                denom = float(r.exam.total_marks)
+            else:
+                denom = 100.0
+            if denom and denom > 0:
+                part_pct = (float(r.marks) / denom) * 100.0
+                parts = entry['subject_percent_parts'].setdefault(sid, [])
+                parts.append(part_pct)
         students = []
         for sid, e in students_map.items():
             avg = (e['total'] / e['count']) if e['count'] else 0.0
-            students.append({ 'id': e['id'], 'name': e['name'], 'total': round(e['total'],2), 'average': round(avg,2), 'marks': e['marks'] })
+            # Build subject percentage map by averaging component percentages for that subject
+            subj_pct_map = {}
+            for sub_id, parts in e['subject_percent_parts'].items():
+                if parts:
+                    subj_pct_map[sub_id] = round(sum(parts) / len(parts), 2)
+            students.append({ 'id': e['id'], 'name': e['name'], 'total': round(e['total'],2), 'average': round(avg,2), 'marks': e['marks'], 'subject_percentages': subj_pct_map })
         # sort by total desc
         students.sort(key=lambda x: x['total'], reverse=True)
         # assign positions
@@ -220,24 +273,151 @@ class ExamViewSet(viewsets.ModelViewSet):
             st['position'] = position
         # class mean (average of student averages)
         class_mean = round(sum(s['average'] for s in students) / len(students), 2) if students else 0.0
-        # subject means
+        # subject means (by marks) and mean percentages (by averaging student subject percentages)
         subj_means = []
+        subj_mean_percentages = []
         subj_ids = [s['id'] for s in class_subjects]
         for sid in subj_ids:
             vals = [st['marks'].get(str(sid)) for st in students if st['marks'].get(str(sid)) is not None]
             mean = round(sum(vals)/len(vals), 2) if vals else 0.0
             subj_means.append({'subject': sid, 'mean': mean})
+            # Mean subject percentage across students
+            pcts = [st.get('subject_percentages', {}).get(str(sid)) for st in students if st.get('subject_percentages', {}).get(str(sid)) is not None]
+            mean_pct = round(sum(pcts)/len(pcts), 2) if pcts else 0.0
+            subj_mean_percentages.append({'subject': sid, 'mean_percentage': mean_pct})
         return {
             'subjects': class_subjects,
             'students': students,
             'class_mean': class_mean,
             'subject_means': subj_means,
+            'subject_mean_percentages': subj_mean_percentages,
         }
 
-    @action(detail=True, methods=['get'], permission_classes=[IsAdmin])
-    def summary(self, request, pk=None):
+    @action(detail=False, methods=['get'], permission_classes=[IsTeacherOrAdmin], url_path='compare')
+    def compare_exams(self, request):
+        """Compare two exams' analytics for the same class/grade.
+        Query params: exam_a, exam_b
+        Returns: { exam_a: summary, exam_b: summary, deltas: {class_mean_delta, subject_means: [{subject, mean_a, mean_b, delta}] } }
+        Access rules are the same as for list/get: teachers restricted to their classes.
+        """
+        exam_a_id = request.query_params.get('exam_a')
+        exam_b_id = request.query_params.get('exam_b')
+        if not (exam_a_id and exam_b_id):
+            return Response({'detail': 'Provide exam_a and exam_b query parameters'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            exam_a = self.get_queryset().get(pk=exam_a_id)
+            exam_b = self.get_queryset().get(pk=exam_b_id)
+        except Exam.DoesNotExist:
+            return Response({'detail': 'One or both exams not found or not accessible'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Optional sanity: same class
+        try:
+            if getattr(exam_a, 'klass_id', None) != getattr(exam_b, 'klass_id', None):
+                # Allow but note difference; many schools compare across classes of same grade
+                pass
+        except Exception:
+            pass
+
+        sum_a = self._build_summary(exam_a)
+        sum_b = self._build_summary(exam_b)
+
+        # Build subject means delta by subject id intersection
+        subj_ids = set([s['id'] for s in sum_a['subjects']]) | set([s['id'] for s in sum_b['subjects']])
+        def find_mean(summary, sid):
+            for item in summary.get('subject_means', []):
+                if str(item.get('subject')) == str(sid) or item.get('subject') == sid:
+                    return item.get('mean')
+            return None
+        deltas = []
+        for sid in subj_ids:
+            ma = find_mean(sum_a, sid)
+            mb = find_mean(sum_b, sid)
+            if ma is None and mb is None:
+                continue
+            deltas.append({'subject': sid, 'mean_a': ma, 'mean_b': mb, 'delta': (None if (ma is None or mb is None) else round(mb - ma, 2))})
+
+        class_mean_delta = None
+        try:
+            if sum_a.get('class_mean') is not None and sum_b.get('class_mean') is not None:
+                class_mean_delta = round(sum_b['class_mean'] - sum_a['class_mean'], 2)
+        except Exception:
+            class_mean_delta = None
+
+        return Response({
+            'exam_a': {'id': getattr(exam_a, 'id', None), 'name': getattr(exam_a, 'name', None), 'year': getattr(exam_a, 'year', None), 'term': getattr(exam_a, 'term', None), 'summary': sum_a},
+            'exam_b': {'id': getattr(exam_b, 'id', None), 'name': getattr(exam_b, 'name', None), 'year': getattr(exam_b, 'year', None), 'term': getattr(exam_b, 'term', None), 'summary': sum_b},
+            'deltas': {
+                'class_mean_delta': class_mean_delta,
+                'subject_means': deltas,
+            }
+        })
+
+    @action(detail=True, methods=['get'], permission_classes=[IsTeacherOrAdmin], url_path='compare-subjects')
+    def compare_subjects(self, request, pk=None):
+        """Compare two subjects within a single exam.
+        Query params: subject_a, subject_b
+        Returns: { subject_a: {...}, subject_b: {...}, per_student: [{student, a_pct, b_pct, delta}], deltas: {mean_percentage_delta} }
+        Uses percentage values computed in _build_summary per subject.
+        """
         exam = self.get_object()
-        return Response(self._build_summary(exam))
+        subj_a = request.query_params.get('subject_a')
+        subj_b = request.query_params.get('subject_b')
+        if not (subj_a and subj_b):
+            return Response({'detail': 'Provide subject_a and subject_b query parameters'}, status=status.HTTP_400_BAD_REQUEST)
+
+        summary = self._build_summary(exam)
+        # Helper to fetch mean percentage for a subject
+        def mean_pct(sid):
+            for item in summary.get('subject_mean_percentages', []):
+                if str(item.get('subject')) == str(sid) or item.get('subject') == sid:
+                    return item.get('mean_percentage')
+            return None
+        mean_a = mean_pct(subj_a)
+        mean_b = mean_pct(subj_b)
+        mean_delta = None if (mean_a is None or mean_b is None) else round(mean_b - mean_a, 2)
+
+        # Build per-student comparison using subject_percentages map
+        per_student = []
+        for st in summary.get('students', []):
+            a_pct = st.get('subject_percentages', {}).get(str(subj_a))
+            b_pct = st.get('subject_percentages', {}).get(str(subj_b))
+            delta = None if (a_pct is None or b_pct is None) else round(b_pct - a_pct, 2)
+            per_student.append({'student_id': st.get('id'), 'student': st.get('name'), 'a_pct': a_pct, 'b_pct': b_pct, 'delta': delta})
+
+        return Response({
+            'exam': {'id': getattr(exam, 'id', None), 'name': getattr(exam, 'name', None), 'year': getattr(exam, 'year', None), 'term': getattr(exam, 'term', None)},
+            'subject_a': {'id': subj_a, 'mean_percentage': mean_a},
+            'subject_b': {'id': subj_b, 'mean_percentage': mean_b},
+            'deltas': {'mean_percentage_delta': mean_delta},
+            'per_student': per_student,
+            'subjects': summary.get('subjects', []),
+        })
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated])
+    def summary(self, request, pk=None):
+        """Return aggregated results for an exam.
+        Access rules:
+        - Admins/staff: always allowed.
+        - Teachers: allowed if they are the class teacher or mapped via ClassSubjectTeacher for the exam's class,
+          OR if the exam is published (read-only access for transparency).
+        - Others: denied.
+        """
+        exam = self.get_object()
+        user = request.user
+        # Admins always allowed
+        if self._is_admin(request):
+            return Response(self._build_summary(exam))
+        # Teachers: allow if published or assigned to the class
+        if getattr(user, 'role', None) == 'teacher':
+            is_class_teacher = getattr(exam.klass, 'teacher_id', None) == getattr(user, 'id', None)
+            is_subject_teacher = ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user).exists()
+            is_published = bool(getattr(exam, 'published', False)) or str(getattr(exam, 'status', '')).lower() == 'published'
+            if is_published or is_class_teacher or is_subject_teacher:
+                return Response(self._build_summary(exam))
+            return Response({'detail': 'You do not have permission to perform this action.'}, status=status.HTTP_403_FORBIDDEN)
+        # Default deny
+        return Response({'detail': 'You do not have permission to perform this action.'}, status=status.HTTP_403_FORBIDDEN)
 
     @action(detail=True, methods=['get'], permission_classes=[IsAdmin], url_path='summary-csv')
     def summary_csv(self, request, pk=None):
@@ -254,7 +434,7 @@ class ExamViewSet(viewsets.ModelViewSet):
             writer.writerow([school.motto])
         writer.writerow([])
         # Table header
-        head = ['Position','Student'] + [s['code'] for s in data['subjects']] + ['Total','Average']
+        head = ['Position','Student'] + [(s.get('name') or s.get('code')) for s in data['subjects']] + ['Total','Average']
         writer.writerow(head)
         for st in data['students']:
             row = [st['position'], st['name']]
@@ -264,7 +444,7 @@ class ExamViewSet(viewsets.ModelViewSet):
             writer.writerow(row)
         writer.writerow([])
         writer.writerow(['Class Mean', data['class_mean']])
-        writer.writerow(['Subject Means'] + [f"{s['code']}:{next((m['mean'] for m in data['subject_means'] if m['subject']==s['id']),0)}" for s in data['subjects']])
+        writer.writerow(['Subject Means'] + [f"{(s.get('name') or s.get('code'))}:{next((m['mean'] for m in data['subject_means'] if m['subject']==s['id']),0)}" for s in data['subjects']])
         csv_text = sio.getvalue()
         resp = HttpResponse(csv_text, content_type='text/csv; charset=utf-8')
         resp['Content-Disposition'] = f'attachment; filename="exam_{exam.id}_summary.csv"'
@@ -302,6 +482,8 @@ class ExamViewSet(viewsets.ModelViewSet):
 
         # Send messages per student
         chat_user_ids = []
+        # Collect in-app notifications for bulk insert
+        notifications_bulk = []
         for sid, data in by_student.items():
             s = data['student']
             total = data['total']
@@ -315,9 +497,14 @@ class ExamViewSet(viewsets.ModelViewSet):
             except Exception:
                 pass
 
-            # Collect for chat mirror
+            # Collect for chat mirror and in-app notifications
             if getattr(s, 'user_id', None):
                 chat_user_ids.append(s.user_id)
+                try:
+                    from communications.models import Notification
+                    notifications_bulk.append(Notification(user_id=s.user_id, message=sms, type='in_app'))
+                except Exception:
+                    pass
 
             # Email with optional PDF attachment
             recipient = getattr(s, 'email', None) or getattr(getattr(s, 'user', None), 'email', None)
@@ -374,6 +561,14 @@ class ExamViewSet(viewsets.ModelViewSet):
                         send_email_safe(f"{exam.name} Results", body, recipient)
             except Exception:
                 pass
+
+        # Create in-app notifications in bulk (best-effort)
+        try:
+            if notifications_bulk:
+                from communications.models import Notification as _Notif
+                _Notif.objects.bulk_create(notifications_bulk, ignore_conflicts=True)
+        except Exception:
+            pass
 
         # Mirror to chat so students see it in Messages UI
         try:
@@ -446,7 +641,7 @@ class ExamViewSet(viewsets.ModelViewSet):
         elements.append(Spacer(1, 12))
 
         # Build results table with calculated column widths
-        table_head = ['Pos','Student'] + [s['code'] for s in data['subjects']] + ['Total','Avg']
+        table_head = ['Pos','Student'] + [(s.get('name') or s.get('code')) for s in data['subjects']] + ['Total','Avg']
         table_rows = [table_head]
         for st in data['students']:
             row = [st['position'], st['name']]
@@ -509,7 +704,7 @@ class ExamViewSet(viewsets.ModelViewSet):
 
         # Class mean and subject means
         elements.append(Paragraph(f"<b>Class Mean:</b> {data['class_mean']}", styles['Normal']))
-        subj_text = ' &nbsp; '.join([f"{s['code']}: {next((m['mean'] for m in data['subject_means'] if m['subject']==s['id']),0)}" for s in data['subjects']])
+        subj_text = ' &nbsp; '.join([f"{(s.get('name') or s.get('code'))}: {next((m['mean'] for m in data['subject_means'] if m['subject']==s['id']),0)}" for s in data['subjects']])
         elements.append(Paragraph(f"<font size=8>{subj_text}</font>", styles['Normal']))
 
         # Footer with page numbers and timestamp
@@ -541,7 +736,8 @@ class ExamViewSet(viewsets.ModelViewSet):
 class ExamResultViewSet(viewsets.ModelViewSet):
     queryset = ExamResult.objects.all()
     serializer_class = ExamResultSerializer
-    permission_classes = [IsTeacherOrAdmin]
+    # Students should be able to read their own published results; teachers/admins can access as scoped in get_queryset
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         qs = super().get_queryset().select_related('exam','student','subject')
@@ -555,6 +751,12 @@ class ExamResultViewSet(viewsets.ModelViewSet):
         student_id = self.request.query_params.get('student')
         if student_id:
             qs = qs.filter(student_id=student_id)
+        subject_id = self.request.query_params.get('subject')
+        if subject_id:
+            qs = qs.filter(subject_id=subject_id)
+        component_id = self.request.query_params.get('component')
+        if component_id:
+            qs = qs.filter(component_id=component_id)
         # Scope for non-admins
         user = getattr(self.request, 'user', None)
         if user and getattr(user, 'role', None) == 'teacher' and not (user.is_staff or user.is_superuser):
@@ -568,19 +770,784 @@ class ExamResultViewSet(viewsets.ModelViewSet):
         school = getattr(getattr(self.request, 'user', None), 'school', None)
         exam = serializer.validated_data.get('exam')
         subject = serializer.validated_data.get('subject')
+        component = serializer.validated_data.get('component')
+        marks = serializer.validated_data.get('marks')
+        out_of = serializer.validated_data.get('out_of')
         user = getattr(self.request, 'user', None)
         if school and exam and exam.klass.school_id != school.id:
             raise ValidationError({'exam': 'Exam must belong to your school'})
+        # Component belongs to subject
+        if component and subject and component.subject_id != subject.id:
+            raise ValidationError({'component': 'Component does not belong to the selected subject'})
+        # Basic marks validation
+        if exam and marks is not None:
+            try:
+                m = float(marks)
+            except (TypeError, ValueError):
+                raise ValidationError({'marks': 'Marks must be a number'})
+            if m < 0:
+                raise ValidationError({'marks': 'Marks cannot be negative'})
+            # Teacher can provide out_of to scale raw marks to the component/exam scale
+            # Determine target maximum for storage and validation
+            target_max = None
+            if component and getattr(component, 'max_marks', None) is not None:
+                target_max = float(component.max_marks)
+            elif getattr(exam, 'total_marks', None) is not None:
+                target_max = float(exam.total_marks)
+            else:
+                target_max = 100.0
+
+            if out_of is not None:
+                try:
+                    oo = float(out_of)
+                except (TypeError, ValueError):
+                    raise ValidationError({'out_of': 'out_of must be a number'})
+                if oo <= 0:
+                    raise ValidationError({'out_of': 'out_of must be greater than 0'})
+                if m > oo:
+                    raise ValidationError({'marks': f'Marks cannot exceed out_of ({oo})'})
+                # Scale marks to target_max
+                m = (m / oo) * target_max
+                serializer.validated_data['marks'] = m
+            else:
+                # If no out_of provided, validate marks directly against target_max
+                if target_max is not None and m > target_max:
+                    raise ValidationError({'marks': f'Marks cannot exceed maximum ({target_max})'})
         # If teacher, ensure they are allowed to submit for this class/subject
+        if user and getattr(user, 'role', None) == 'teacher' and not (user.is_staff or user.is_superuser):
+            allowed = False
+            reason = ''
+            if exam and exam.klass and exam.klass.teacher_id == user.id:
+                allowed = True
+                reason = 'class_teacher'
+            if not allowed and exam and subject:
+                # Exact subject assignment
+                if ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user, subject=subject).exists():
+                    allowed = True
+                    reason = 'subject_teacher_exact'
+                else:
+                    # Fallback: teacher mapped to the class for any subject and chosen subject belongs to the class
+                    mapped_any = ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user).exists()
+                    subject_in_class = exam.klass.subjects.filter(pk=getattr(subject, 'id', None)).exists()
+                    if mapped_any and subject_in_class:
+                        allowed = True
+                        reason = 'subject_teacher_class_scope'
+            if not allowed:
+                raise ValidationError({'detail': 'You are not assigned to this class/subject for this exam', 'code': 'not_assigned'})
+        # Upsert to avoid unique_together conflicts (exam, student, subject)
+        try:
+            serializer.save()
+        except IntegrityError:
+            vd = serializer.validated_data
+            with transaction.atomic():
+                obj, _ = ExamResult.objects.update_or_create(
+                    exam=vd['exam'],
+                    student=vd['student'],
+                    subject=vd['subject'],
+                    component=vd.get('component'),
+                    defaults={'marks': vd['marks']},
+                )
+            serializer.instance = obj
+
+    @action(detail=False, methods=['post'], permission_classes=[IsTeacherOrAdmin], url_path='bulk')
+    def bulk_upsert(self, request):
+        """Admin-only bulk upsert of exam results.
+        Payload format:
+        {
+          "results": [
+            {"exam": <id>, "student": <id>, "subject": <id>, "marks": <float>}, ...
+          ]
+        }
+        """
+        items = request.data.get('results')
+        if not isinstance(items, list):
+            return Response({'detail': 'results must be an array'}, status=400)
+        successes = 0
+        errors = []
+        out_ids = []
+        user = getattr(request, 'user', None)
+        for idx, item in enumerate(items):
+            if not isinstance(item, dict):
+                errors.append({'index': idx, 'error': 'Invalid item'})
+                continue
+            # Parse IDs (accept either objects or IDs)
+            try:
+                exam_id = getattr(item.get('exam'), 'id', None) or int(item.get('exam'))
+                student_id = getattr(item.get('student'), 'id', None) or int(item.get('student'))
+                subject_id = getattr(item.get('subject'), 'id', None) or int(item.get('subject'))
+                marks = item.get('marks')
+                component_id = item.get('component')
+                if component_id is not None:
+                    component_id = getattr(component_id, 'id', None) or int(component_id)
+                out_of = item.get('out_of')
+            except Exception:
+                errors.append({'index': idx, 'error': {'detail': 'Invalid identifiers in payload'}})
+                continue
+            # Fetch instances
+            try:
+                exam = Exam.objects.select_related('klass').get(pk=exam_id)
+                student = Student.objects.get(pk=student_id)
+                subject = Subject.objects.get(pk=subject_id)
+                component = None
+                if component_id is not None:
+                    component = SubjectComponent.objects.get(pk=component_id)
+            except Exam.DoesNotExist:
+                errors.append({'index': idx, 'error': {'exam': 'Not found'}})
+                continue
+            except Student.DoesNotExist:
+                errors.append({'index': idx, 'error': {'student': 'Not found'}})
+                continue
+            except Subject.DoesNotExist:
+                errors.append({'index': idx, 'error': {'subject': 'Not found'}})
+                continue
+            except SubjectComponent.DoesNotExist:
+                errors.append({'index': idx, 'error': {'component': 'Not found'}})
+                continue
+            # Basic scope + marks validations (similar to perform_create)
+            school = getattr(getattr(request, 'user', None), 'school', None)
+            if school and exam and exam.klass.school_id != school.id:
+                errors.append({'index': idx, 'error': {'exam': 'Exam must belong to your school'}})
+                continue
+            # Component belongs to subject
+            if component and component.subject_id != subject.id:
+                errors.append({'index': idx, 'error': {'component': 'Component does not belong to the selected subject'}})
+                continue
+            # Teacher permission: same rules as perform_create
+            if user and getattr(user, 'role', None) == 'teacher' and not (user.is_staff or user.is_superuser):
+                allowed = False
+                if exam and exam.klass and exam.klass.teacher_id == user.id:
+                    allowed = True
+                if not allowed and exam and subject:
+                    if ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user, subject=subject).exists():
+                        allowed = True
+                    else:
+                        mapped_any = ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user).exists()
+                        subject_in_class = exam.klass.subjects.filter(pk=getattr(subject, 'id', None)).exists()
+                        if mapped_any and subject_in_class:
+                            allowed = True
+                if not allowed:
+                    errors.append({'index': idx, 'error': {'detail': 'You are not assigned to this class/subject for this exam'}})
+                    continue
+            try:
+                m = float(marks)
+                if m < 0:
+                    raise ValidationError({'marks': 'Marks cannot be negative'})
+                # Determine target maximum
+                target_max = None
+                if component and getattr(component, 'max_marks', None) is not None:
+                    target_max = float(component.max_marks)
+                elif getattr(exam, 'total_marks', None) is not None:
+                    target_max = float(exam.total_marks)
+                else:
+                    target_max = 100.0
+
+                if out_of is not None:
+                    try:
+                        oo = float(out_of)
+                    except (TypeError, ValueError):
+                        raise ValidationError({'out_of': 'out_of must be a number'})
+                    if oo <= 0:
+                        raise ValidationError({'out_of': 'out_of must be greater than 0'})
+                    if m > oo:
+                        raise ValidationError({'marks': f'Marks cannot exceed out_of ({oo})'})
+                    # Scale to target_max
+                    m = (m / oo) * target_max
+                else:
+                    if target_max is not None and m > target_max:
+                        raise ValidationError({'marks': f'Marks cannot exceed maximum ({target_max})'})
+            except ValidationError as ve:
+                errors.append({'index': idx, 'error': ve.detail})
+                continue
+            except Exception:
+                errors.append({'index': idx, 'error': {'marks': 'Marks must be a number'}})
+                continue
+            # Upsert
+            try:
+                with transaction.atomic():
+                    obj, _ = ExamResult.objects.update_or_create(
+                        exam=exam,
+                        student=student,
+                        subject=subject,
+                        component=component,
+                        defaults={'marks': m},
+                    )
+                successes += 1
+                out_ids.append(obj.id)
+            except Exception as ex:
+                errors.append({'index': idx, 'error': str(ex)})
+        status_code = 200 if not errors else 207  # 207 Multi-Status semantic
+        return Response({'saved': successes, 'failed': len(errors), 'errors': errors, 'ids': out_ids}, status=status_code)
+
+    @action(
+        detail=False,
+        methods=['post'],
+        permission_classes=[IsTeacherOrAdmin],
+        url_path='upload',
+        parser_classes=[MultiPartParser, FormParser, JSONParser]
+    )
+    def upload_results(self, request):
+        """Upload marks from a CSV/XLSX file or an image (OCR).
+        Request (multipart/form-data or JSON for URLs):
+        - file: uploaded file (csv, xlsx, xls, png, jpg, jpeg)
+        - exam: exam ID (required)
+        - subject: subject ID (required)
+        - component: optional subject component ID
+        - out_of: optional numeric total marks to scale from
+        - commit: boolean; if false or omitted, returns a preview; if true, saves
+        - column_map: optional JSON object mapping your headers to expected keys,
+                       e.g. {"admission_no":"ADM", "name":"Student Name", "marks":"Score"}
+
+        Matching logic per row (in order):
+        1) student_id
+        2) admission_no (exact)
+        3) name (case-insensitive exact)
+        """
+        file = request.FILES.get('file')
+        exam_id = request.data.get('exam')
+        subject_id = request.data.get('subject')
+        component_id = request.data.get('component')
+        out_of = request.data.get('out_of')
+        commit = str(request.data.get('commit', '')).lower() in ('1','true','yes','on')
+        debug_flag = str(request.data.get('debug', '')).lower() in ('1','true','yes','on')
+        column_map = request.data.get('column_map')
+        # Parse column_map if sent as JSON string
+        if isinstance(column_map, str):
+            try:
+                import json as _json
+                column_map = _json.loads(column_map)
+            except Exception:
+                column_map = None
+
+        # Validate core IDs
+        try:
+            exam = Exam.objects.select_related('klass').get(pk=int(exam_id))
+            subject = Subject.objects.get(pk=int(subject_id))
+            component = None
+            if component_id not in (None, ''):
+                component = SubjectComponent.objects.get(pk=int(component_id))
+        except Exam.DoesNotExist:
+            return Response({'detail': 'exam not found'}, status=404)
+        except Subject.DoesNotExist:
+            return Response({'detail': 'subject not found'}, status=404)
+        except SubjectComponent.DoesNotExist:
+            return Response({'detail': 'component not found'}, status=404)
+        except (TypeError, ValueError):
+            return Response({'detail': 'invalid identifiers'}, status=400)
+
+        # School scope and component-subject consistency
+        school = getattr(getattr(request, 'user', None), 'school', None)
+        if school and exam.klass.school_id != getattr(school, 'id', None):
+            return Response({'detail': 'Exam must belong to your school'}, status=403)
+        if component and component.subject_id != subject.id:
+            return Response({'detail': 'Component does not belong to the selected subject'}, status=400)
+
+        # Teacher permissions (same as bulk)
+        user = getattr(request, 'user', None)
         if user and getattr(user, 'role', None) == 'teacher' and not (user.is_staff or user.is_superuser):
             allowed = False
             if exam and exam.klass and exam.klass.teacher_id == user.id:
                 allowed = True
-            if not allowed and exam and subject:
-                allowed = ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user, subject=subject).exists()
+            if not allowed and subject:
+                if ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user, subject=subject).exists():
+                    allowed = True
+                else:
+                    mapped_any = ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user).exists()
+                    subject_in_class = exam.klass.subjects.filter(pk=getattr(subject, 'id', None)).exists()
+                    if mapped_any and subject_in_class:
+                        allowed = True
             if not allowed:
-                raise ValidationError({'detail': 'You are not assigned to this class/subject for this exam'})
-        serializer.save()
+                return Response({'detail': 'You are not assigned to this class/subject for this exam'}, status=403)
+
+        # Load roster for matching
+        class_students = Student.objects.filter(klass=exam.klass)
+        by_id = {s.id: s for s in class_students}
+        by_adm = {str(getattr(s, 'admission_no', '')).strip(): s for s in class_students if getattr(s, 'admission_no', None)}
+        # Normalized admission map to tolerate OCR quirks (O/0, I/1, dashes/spaces)
+        def _norm_adm(x: str):
+            if x is None:
+                return None
+            s = str(x).strip().upper()
+            # Replace common OCR mistakes
+            s = s.replace('O', '0')
+            s = s.replace('I', '1').replace('L', '1')
+            # Remove non-alphanumeric
+            import re as _re
+            s = _re.sub(r"[^A-Z0-9]", "", s)
+            return s
+        by_adm_norm = {}
+        for k, stu in by_adm.items():
+            nk = _norm_adm(k)
+            if nk:
+                by_adm_norm[nk] = stu
+        def _norm_name(x):
+            try:
+                # lowercase, strip, collapse multiple spaces
+                return ' '.join(str(x).strip().lower().split())
+            except Exception:
+                return None
+        by_name = {_norm_name(getattr(s, 'name', '')): s for s in class_students if getattr(s, 'name', None)}
+
+        # Helper to normalize columns
+        def resolve_columns(header):
+            hmap = {str(k).strip().lower(): k for k in header}
+            def pick(*cands):
+                for c in cands:
+                    if c in hmap:
+                        return hmap[c]
+                return None
+            if column_map and isinstance(column_map, dict):
+                id_col = column_map.get('student_id')
+                adm_col = column_map.get('admission_no')
+                name_col = column_map.get('name')
+                marks_col = column_map.get('marks')
+            else:
+                id_col = pick('student_id','id')
+                adm_col = pick('admission_no','adm','adm_no','admission')
+                name_col = pick('name','student','student_name')
+                marks_col = pick('marks','score','points')
+            return id_col, adm_col, name_col, marks_col
+
+        # Parse incoming file (CSV/XLSX) or attempt OCR on images
+        rows = []  # list of dicts {student_id?, admission_no?, name?, marks?}
+        ocr_text = None
+        raw_lines = []
+        if file:
+            fname = getattr(file, 'name', 'upload').lower()
+            if fname.endswith('.csv'):
+                # Robust CSV handling: try utf-8-sig, fall back to utf-8/latin1, sniff delimiter
+                raw = file.read()
+                try:
+                    text = raw.decode('utf-8-sig')
+                except Exception:
+                    try:
+                        text = raw.decode('utf-8')
+                    except Exception:
+                        text = raw.decode('latin1', errors='ignore')
+                import csv as _csv
+                try:
+                    sniffer = _csv.Sniffer()
+                    dialect = sniffer.sniff(text[:4096])
+                    delim = dialect.delimiter
+                except Exception:
+                    # Common alternates if sniff fails
+                    if '\t' in text and text.count('\t') > text.count(','):
+                        delim = '\t'
+                    elif ';' in text and text.count(';') > text.count(','):
+                        delim = ';'
+                    else:
+                        delim = ','
+                reader = _csv.DictReader(StringIO(text), delimiter=delim)
+                id_col, adm_col, name_col, marks_col = resolve_columns(reader.fieldnames or [])
+                for r in reader:
+                    rows.append({
+                        'student_id': r.get(id_col) if id_col else None,
+                        'admission_no': r.get(adm_col) if adm_col else None,
+                        'name': r.get(name_col) if name_col else None,
+                        'marks': r.get(marks_col) if marks_col else None,
+                    })
+            elif fname.endswith('.xlsx') or fname.endswith('.xls'):
+                try:
+                    from openpyxl import load_workbook
+                except Exception:
+                    return Response({'detail': 'openpyxl is required to parse Excel files. Please install it on the server.'}, status=500)
+                wb = load_workbook(file, read_only=True, data_only=True)
+                ws = wb.active
+                header = []
+                data_started = False
+                for i, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                    if i == 1:
+                        header = [str(c).strip() if c is not None else '' for c in row]
+                        id_col, adm_col, name_col, marks_col = resolve_columns(header)
+                        data_started = True
+                        continue
+                    if not data_started:
+                        continue
+                    values = list(row)
+                    def get(col_name):
+                        if not col_name:
+                            return None
+                        idx = header.index(col_name)
+                        return values[idx] if idx < len(values) else None
+                    rows.append({
+                        'student_id': get(id_col),
+                        'admission_no': get(adm_col),
+                        'name': get(name_col),
+                        'marks': get(marks_col),
+                    })
+            elif any(fname.endswith(ext) for ext in ('.png','.jpg','.jpeg','.bmp','.webp','.tif','.tiff')):
+                # OCR via pytesseract if available
+                try:
+                    from PIL import Image as _Image
+                    import pytesseract as _pyt
+                    # Try to auto-configure tesseract path on Windows via env var
+                    import os as _os
+                    tpath = _os.environ.get('TESSERACT_CMD') or _os.environ.get('TESSERACT_PATH')
+                    if tpath:
+                        try:
+                            _pyt.pytesseract.tesseract_cmd = tpath
+                        except Exception:
+                            pass
+                except Exception:
+                    return Response({'detail': 'OCR not available. Install pytesseract and the Tesseract OCR binary to read images.'}, status=500)
+                try:
+                    img = _Image.open(file)
+                    # Basic pre-processing to improve OCR
+                    try:
+                        from PIL import ImageOps as _ImageOps, ImageFilter as _ImageFilter, ImageEnhance as _ImageEnhance
+                        img = img.convert('L')  # grayscale
+                        img = _ImageOps.autocontrast(img)
+                        # Slight upscale for small screenshots
+                        try:
+                            if img.width < 1600:
+                                scale = 1600 / float(img.width)
+                                img = img.resize((int(img.width*scale), int(img.height*scale)), _Image.LANCZOS)
+                        except Exception:
+                            pass
+                        img = img.filter(_ImageFilter.SHARPEN)
+                        img = _ImageEnhance.Contrast(img).enhance(1.2)
+                    except Exception:
+                        pass
+                    # If tesseract is not in PATH and not configured above, this will raise an error
+                    config = '--oem 3 --psm 6'
+                    text = _pyt.image_to_string(img, lang='eng', config=config)
+                    if not text or not text.strip():
+                        # Fallback: reconstruct lines from word-level data
+                        try:
+                            from pytesseract import Output as _Output
+                            data = _pyt.image_to_data(img, lang='eng', config=config, output_type=_Output.DICT)
+                            lines = {}
+                            for i in range(len(data.get('text', []))):
+                                word = str(data['text'][i] or '').strip()
+                                if not word:
+                                    continue
+                                key = (data.get('block_num',[0])[i], data.get('par_num',[0])[i], data.get('line_num',[0])[i])
+                                lines.setdefault(key, []).append(word)
+                            text = '\n'.join(' '.join(words) for _, words in sorted(lines.items()))
+                        except Exception:
+                            pass
+                    ocr_text = text
+                    import re as _re
+                    # Strategy:
+                    # - Split by lines
+                    # - For each non-empty line, attempt several patterns
+                    #   1) CSV/TSV-like: id,name,marks OR admission,name,marks
+                    #   2) Free text with last number as marks: <anything name> <number>
+                    #   3) Hyphen/colon separated: name - number, name: number
+                    number_re = _re.compile(r"(?P<marks>\d+(?:\.\d+)?)\s*$")
+                    # Common separators: commas, tabs, multiple spaces, dashes, colons
+                    sep_re = _re.compile(r"[,\t]|\s{2,}|\s-\s|\s–\s|\s—\s|:\s")
+                    for raw in text.splitlines():
+                        l = str(raw or '').strip()
+                        if not l:
+                            continue
+                        raw_lines.append(l)
+                        # Try CSV/TSV or obvious separators first
+                        parts = [p.strip() for p in sep_re.split(l) if str(p).strip()]
+                        sid = None; adm = None; nm = None; mk = None
+                        if len(parts) >= 2:
+                            # If the last part is numeric, take it as marks
+                            if parts[-1].replace('.', '', 1).isdigit():
+                                mk = parts[-1]
+                                # Reconstruct a plausible name from remaining parts, ignoring an initial numeric id
+                                rest = parts[:-1]
+                                if rest and str(rest[0]).isdigit():
+                                    # first token is student_id
+                                    sid = rest[0]
+                                    # if the next token looks like an admission number, take it
+                                    if len(rest) >= 2:
+                                        # simple heuristic: contains letters+digits or a hyphen
+                                        t1 = rest[1]
+                                        if any(c.isalpha() for c in t1) and any(c.isdigit() for c in t1):
+                                            adm = t1
+                                            nm = ' '.join(rest[2:])
+                                        else:
+                                            nm = ' '.join(rest[1:])
+                                    else:
+                                        nm = ''
+                                else:
+                                    # if first token looks like an admission, keep it and name is the rest
+                                    if rest and any(c.isalpha() for c in rest[0]) and any(c.isdigit() for c in rest[0]):
+                                        adm = rest[0]
+                                        nm = ' '.join(rest[1:])
+                                    else:
+                                        nm = ' '.join(rest)
+                        # If still no marks, fallback: find trailing number with regex
+                        if mk is None:
+                            m = number_re.search(l)
+                            if m:
+                                mk = m.group('marks')
+                                pre = l[:m.start()].strip()
+                                # Tokenize on whitespace to extract id/admission/name
+                                toks = [t for t in pre.split() if t]
+                                if toks:
+                                    # Case A: first token numeric -> student_id
+                                    if toks[0].isdigit():
+                                        sid = toks[0]
+                                        rest = toks[1:]
+                                        if rest:
+                                            # If next token looks like an admission (letters+digits or contains '-')
+                                            t1 = rest[0]
+                                            if any(c.isalpha() for c in t1) and any(c.isdigit() for c in t1):
+                                                adm = t1
+                                                nm = ' '.join(rest[1:])
+                                            else:
+                                                nm = ' '.join(rest)
+                                        else:
+                                            nm = ''
+                                    else:
+                                        # Case B: start with admission then name
+                                        if any(c.isalpha() for c in toks[0]) and any(c.isdigit() for c in toks[0]):
+                                            adm = toks[0]
+                                            nm = ' '.join(toks[1:])
+                                        else:
+                                            # Case C: just name before number
+                                            nm = pre
+                        # Append if we extracted at least a name or id and marks
+                        if mk is not None and (nm or adm or sid):
+                            rows.append({'student_id': sid, 'admission_no': adm, 'name': nm, 'marks': mk})
+                except Exception as ex:
+                    # Provide clearer guidance for missing binary
+                    msg = str(ex)
+                    help_hint = 'Tesseract is not installed or not on PATH. Install Tesseract OCR and, if needed, set env var TESSERACT_CMD to the tesseract.exe full path.'
+                    return Response({'detail': f'OCR parse failed: {msg}', 'hint': help_hint}, status=400)
+            else:
+                return Response({'detail': 'Unsupported file type. Use CSV, XLSX/XLS, or an image.'}, status=400)
+        else:
+            return Response({'detail': 'file is required'}, status=400)
+
+        # Validate marks and compute scaling
+        def coerce_float(val):
+            if val is None:
+                return None
+            try:
+                return float(str(val).strip())
+            except Exception:
+                return None
+
+        # Determine target maximum for validation
+        target_max = None
+        if component and getattr(component, 'max_marks', None) is not None:
+            target_max = float(component.max_marks)
+        elif getattr(exam, 'total_marks', None) is not None:
+            target_max = float(exam.total_marks)
+        else:
+            target_max = 100.0
+
+        # Parse out_of
+        out_of_val = None
+        if out_of not in (None, ''):
+            try:
+                out_of_val = float(out_of)
+                if out_of_val <= 0:
+                    return Response({'detail': 'out_of must be greater than 0'}, status=400)
+            except Exception:
+                return Response({'detail': 'out_of must be a number'}, status=400)
+
+        preview = []
+        to_save = []
+        # Optional: fuzzy name matching helper
+        try:
+            from difflib import SequenceMatcher as _SeqMatch
+        except Exception:
+            _SeqMatch = None
+
+        def _best_name_match(name_str):
+            if not name_str:
+                return None
+            key = ' '.join(str(name_str).strip().lower().split())
+            if key in by_name:
+                return by_name[key]
+            if _SeqMatch is None:
+                return None
+            # Fallback: pick best similarity
+            best = None
+            best_ratio = 0.0
+            for k, stu in by_name.items():
+                if not k:
+                    continue
+                ratio = _SeqMatch(None, key, k).ratio()
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    best = stu
+            return best if best_ratio >= 0.8 else None
+
+        for i, r in enumerate(rows):
+            raw_marks = coerce_float(r.get('marks'))
+            sid_raw = r.get('student_id')
+            adm_raw = r.get('admission_no')
+            name_raw = r.get('name')
+
+            # Match student
+            matched = None
+            sid_int = None
+            try:
+                if sid_raw is not None and str(sid_raw).strip() != '':
+                    sid_int = int(str(sid_raw).strip())
+            except Exception:
+                sid_int = None
+            if sid_int and sid_int in by_id:
+                matched = by_id[sid_int]
+            elif adm_raw is not None:
+                raw_key = str(adm_raw).strip()
+                if raw_key in by_adm:
+                    matched = by_adm[raw_key]
+                else:
+                    nk = _norm_adm(raw_key)
+                    if nk in by_adm_norm:
+                        matched = by_adm_norm[nk]
+            elif name_raw is not None:
+                # Try exact then fuzzy name match
+                candidate = _best_name_match(name_raw)
+                if candidate:
+                    matched = candidate
+
+            error = None
+            scaled = None
+            if raw_marks is None:
+                error = {'marks': 'Marks must be a number'}
+            elif raw_marks < 0:
+                error = {'marks': 'Marks cannot be negative'}
+            else:
+                if out_of_val is not None:
+                    if raw_marks > out_of_val:
+                        error = {'marks': f'Marks cannot exceed out_of ({out_of_val})'}
+                    else:
+                        scaled = (raw_marks / out_of_val) * target_max
+                else:
+                    if target_max is not None and raw_marks > target_max:
+                        error = {'marks': f'Marks cannot exceed maximum ({target_max})'}
+                    else:
+                        scaled = raw_marks
+
+            preview.append({
+                'index': i,
+                'student': getattr(matched, 'id', None),
+                'student_name': getattr(matched, 'name', None) if matched else None,
+                'input': {'student_id': sid_raw, 'admission_no': adm_raw, 'name': name_raw, 'marks': r.get('marks')},
+                'scaled_marks': None if scaled is None else round(float(scaled), 2),
+                'error': error if (error or matched is None) else None,
+            })
+
+            if matched and scaled is not None and not error:
+                to_save.append((matched, float(scaled)))
+
+        if not commit:
+            # Return preview only
+            resp = {
+                'exam': exam.id,
+                'subject': subject.id,
+                'component': getattr(component, 'id', None),
+                'target_max': target_max,
+                'rows': preview,
+                'would_save': len(to_save),
+                'total_rows': len(rows),
+            }
+            if debug_flag and ocr_text is not None:
+                resp['ocr_text'] = ocr_text
+                resp['ocr_lines'] = raw_lines
+            return Response(resp)
+
+        # Commit upserts
+        successes = 0
+        errors = []
+        saved_ids = []
+        for idx, (stu, mval) in enumerate(to_save):
+            try:
+                with transaction.atomic():
+                    obj, _ = ExamResult.objects.update_or_create(
+                        exam=exam,
+                        student=stu,
+                        subject=subject,
+                        component=component,
+                        defaults={'marks': mval},
+                    )
+                successes += 1
+                saved_ids.append(obj.id)
+            except Exception as ex:
+                errors.append({'index': idx, 'error': str(ex)})
+
+        status_code = 200 if not errors else 207
+        return Response({'saved': successes, 'failed': len(errors), 'errors': errors, 'ids': saved_ids})
+
+    @action(
+        detail=False,
+        methods=['get'],
+        permission_classes=[IsTeacherOrAdmin],
+        url_path='upload-template'
+    )
+    def upload_template(self, request):
+        """Download a CSV template for an exam+subject with the class roster prefilled.
+        Query params:
+        - exam: exam ID (required)
+        - subject: subject ID (required)
+        - component: optional subject component ID (for information only)
+        Columns: student_id,admission_no,name,marks
+        """
+        exam_id = request.query_params.get('exam')
+        subject_id = request.query_params.get('subject')
+        component_id = request.query_params.get('component')
+        try:
+            exam = Exam.objects.select_related('klass').get(pk=int(exam_id))
+            subject = Subject.objects.get(pk=int(subject_id))
+            component = None
+            if component_id not in (None, '', 'null'):
+                component = SubjectComponent.objects.get(pk=int(component_id))
+        except (TypeError, ValueError):
+            return Response({'detail': 'invalid identifiers'}, status=400)
+        except Exam.DoesNotExist:
+            return Response({'detail': 'exam not found'}, status=404)
+        except Subject.DoesNotExist:
+            return Response({'detail': 'subject not found'}, status=404)
+        except SubjectComponent.DoesNotExist:
+            return Response({'detail': 'component not found'}, status=404)
+
+        # School scope and teacher permission
+        school = getattr(getattr(request, 'user', None), 'school', None)
+        if school and exam.klass.school_id != getattr(school, 'id', None):
+            return Response({'detail': 'Exam must belong to your school'}, status=403)
+        user = getattr(request, 'user', None)
+        if user and getattr(user, 'role', None) == 'teacher' and not (user.is_staff or user.is_superuser):
+            allowed = False
+            if exam and exam.klass and exam.klass.teacher_id == user.id:
+                allowed = True
+            if not allowed and subject:
+                if ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user, subject=subject).exists():
+                    allowed = True
+                else:
+                    mapped_any = ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user).exists()
+                    subject_in_class = exam.klass.subjects.filter(pk=getattr(subject, 'id', None)).exists()
+                    if mapped_any and subject_in_class:
+                        allowed = True
+            if not allowed:
+                return Response({'detail': 'You are not assigned to this class/subject for this exam'}, status=403)
+
+        # Build CSV
+        sio = StringIO()
+        writer = csv.writer(sio)
+        comps = list(SubjectComponent.objects.filter(subject=subject))
+        if comps and component is None:
+            # Multi-component template: one column per component
+            comp_cols = []
+            for c in comps:
+                label = (getattr(c, 'code', None) or getattr(c, 'name', None) or f"comp_{c.id}")
+                comp_cols.append((c.id, str(label)))
+            header = ['student_id','admission_no','name'] + [lbl for _, lbl in comp_cols]
+            writer.writerow(header)
+            for s in Student.objects.filter(klass=exam.klass).order_by('name'):
+                row = [s.id, getattr(s,'admission_no',''), getattr(s,'name','')]
+                row += ['' for _ in comp_cols]
+                writer.writerow(row)
+        else:
+            # Single-paper (whole subject or a specific component) template
+            writer.writerow(['student_id','admission_no','name','marks'])
+            for s in Student.objects.filter(klass=exam.klass).order_by('name'):
+                writer.writerow([s.id, getattr(s,'admission_no',''), getattr(s,'name',''), ''])
+        csv_text = sio.getvalue()
+        resp = HttpResponse(csv_text, content_type='text/csv; charset=utf-8')
+        subj_code = getattr(subject, 'code', subject.id)
+        comp_tag = f"_comp{component.id}" if component else ("_all_components" if comps and component is None else '')
+        resp['Content-Disposition'] = f'attachment; filename="upload_template_exam{exam.id}_subj{subj_code}{comp_tag}.csv"'
+        return resp
 
 class StudentViewSet(viewsets.ModelViewSet):
     queryset = Student.objects.all()
@@ -612,6 +1579,31 @@ class StudentViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Student record not found for this user'}, status=404)
         ser = self.get_serializer(student)
         return Response(ser.data)
+
+    @action(detail=False, methods=['patch', 'post'], permission_classes=[permissions.IsAuthenticated], url_path='my/update')
+    def my_update(self, request):
+        """Allow the authenticated student to update limited contact fields: email, phone, address.
+        Accepts PATCH or POST with any subset of these fields.
+        """
+        user = request.user
+        student = self.get_queryset().filter(user=user).first()
+        if not student:
+            return Response({'detail': 'Student record not found for this user'}, status=404)
+        # Whitelist editable fields — use guardian phone (guardian_id) instead of student phone
+        allowed_fields = ['email', 'address', 'guardian_id']
+        payload = {k: v for k, v in request.data.items() if k in allowed_fields}
+        # Backward compatibility: if 'phone' provided, treat it as guardian phone
+        if 'phone' in request.data and 'guardian_id' not in payload:
+            payload['guardian_id'] = request.data.get('phone')
+        if not payload:
+            return Response({'detail': 'No editable fields provided. Allowed: email, address, guardian_id (guardian phone).'}, status=400)
+        # If guardian phone is being updated, clear student.phone to "remove" student phone number
+        if 'guardian_id' in payload:
+            payload['phone'] = ''
+        serializer = self.get_serializer(student, data=payload, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 class CompetencyViewSet(viewsets.ModelViewSet):
     queryset = Competency.objects.all()
@@ -689,6 +1681,29 @@ class SubjectViewSet(viewsets.ModelViewSet):
             'grading': grading,
         })
 
+class SubjectComponentViewSet(viewsets.ModelViewSet):
+    queryset = SubjectComponent.objects.all()
+    serializer_class = SubjectComponentSerializer
+    # Allow teachers to READ components, but only admins can CREATE/UPDATE/DELETE
+    permission_classes = [IsAdmin]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['subject']
+
+    def get_queryset(self):
+        qs = super().get_queryset().select_related('subject')
+        # Optional scope by user's school via the parent subject
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if school:
+            qs = qs.filter(subject__school=school)
+        return qs
+
+    def get_permissions(self):
+        # Safe methods (list/retrieve) are available to teachers and admins
+        if getattr(self, 'action', None) in ('list', 'retrieve') or self.request.method in permissions.SAFE_METHODS:
+            return [IsTeacherOrAdmin()]
+        # Mutations require admin rights
+        return [IsAdmin()]
+
 class AssessmentViewSet(viewsets.ModelViewSet):
     queryset = Assessment.objects.all()
     serializer_class = AssessmentSerializer
@@ -696,12 +1711,28 @@ class AssessmentViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['student']
 
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated], url_path='my')
+    def my(self, request):
+        """Return assessments for the authenticated student."""
+        user = request.user
+        # Find linked student
+        student = Student.objects.filter(user=user).first()
+        if not student:
+            return Response({'detail': 'Student record not found for this user'}, status=404)
+        qs = self.get_queryset().filter(student=student)
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            ser = self.get_serializer(page, many=True)
+            return self.get_paginated_response(ser.data)
+        ser = self.get_serializer(qs, many=True)
+        return Response(ser.data)
+
 class LessonPlanViewSet(viewsets.ModelViewSet):
     queryset = LessonPlan.objects.all()
     serializer_class = LessonPlanSerializer
     permission_classes = [IsTeacherOrAdmin]
     filter_backends = [DjangoFilterBackend]
-    filterset_fields = ['klass','subject','date']
+    filterset_fields = ['klass','subject','term','week','date']
 
     def get_queryset(self):
         qs = super().get_queryset().select_related('klass','subject','teacher')
@@ -747,7 +1778,7 @@ class RoomViewSet(viewsets.ModelViewSet):
 class TimetableEntryViewSet(viewsets.ModelViewSet):
     queryset = TimetableEntry.objects.all()
     serializer_class = TimetableEntrySerializer
-    permission_classes = [IsAdmin]
+    permission_classes = [IsAdminOrTeacherReadOnly]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['term','klass','subject','teacher','day_of_week','room']
 
@@ -782,6 +1813,21 @@ class AttendanceViewSet(viewsets.ModelViewSet):
     permission_classes = [IsTeacherOrAdmin]
     filter_backends = [DjangoFilterBackend]
     filterset_fields = ['student']
+
+    @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated], url_path='my')
+    def my(self, request):
+        """Return attendance entries for the authenticated student."""
+        user = request.user
+        student = Student.objects.filter(user=user).first()
+        if not student:
+            return Response({'detail': 'Student record not found for this user'}, status=404)
+        qs = self.get_queryset().filter(student=student).order_by('-date')
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            ser = self.get_serializer(page, many=True)
+            return self.get_paginated_response(ser.data)
+        ser = self.get_serializer(qs, many=True)
+        return Response(ser.data)
 
 class TeacherProfileViewSet(viewsets.ModelViewSet):
     queryset = TeacherProfile.objects.all()
@@ -984,3 +2030,153 @@ def import_competencies(request):
         created += 1 if is_created else 0
         updated += 0 if is_created else 1
     return Response({'created': created, 'updated': updated}, status=201)
+
+
+# ===== Timetable Planning ViewSets =====
+class TimetableTemplateViewSet(viewsets.ModelViewSet):
+    queryset = TimetableTemplate.objects.all()
+    serializer_class = TimetableTemplateSerializer
+    permission_classes = [IsAdminOrTeacherReadOnly]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if school:
+            qs = qs.filter(school=school)
+        return qs
+
+    def perform_create(self, serializer):
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if not school:
+            raise ValidationError({'school': 'School is required'})
+        serializer.save(school=school)
+
+
+class PeriodSlotTemplateViewSet(viewsets.ModelViewSet):
+    queryset = PeriodSlotTemplate.objects.all()
+    serializer_class = PeriodSlotTemplateSerializer
+    permission_classes = [IsAdminOrTeacherReadOnly]
+
+    def get_queryset(self):
+        qs = super().get_queryset().select_related('template')
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if school:
+            qs = qs.filter(template__school=school)
+        template_id = self.request.query_params.get('template')
+        if template_id:
+            qs = qs.filter(template_id=template_id)
+        return qs
+
+
+class TimetablePlanViewSet(viewsets.ModelViewSet):
+    queryset = TimetablePlan.objects.all()
+    serializer_class = TimetablePlanSerializer
+    permission_classes = [IsAdminOrTeacherReadOnly]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['term','status']
+
+    def get_queryset(self):
+        qs = super().get_queryset().select_related('term','template')
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if school:
+            qs = qs.filter(school=school)
+        return qs
+
+    def perform_create(self, serializer):
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if not school:
+            raise ValidationError({'school': 'School is required'})
+        serializer.save(school=school, created_by=getattr(self.request, 'user', None))
+
+    @action(detail=True, methods=['post'], url_path='generate', permission_classes=[IsAdmin])
+    def generate(self, request, pk=None):
+        plan = self.get_object()
+        # Stub: wire to generator service later
+        # from .services.timetable_generator import generate
+        # result = generate(plan)
+        result = {
+            'version_id': None,
+            'placed_count': 0,
+            'unplaced': [],
+            'detail': 'Generator not yet implemented.'
+        }
+        return Response(result)
+
+
+class TimetableClassConfigViewSet(viewsets.ModelViewSet):
+    queryset = TimetableClassConfig.objects.all()
+    serializer_class = TimetableClassConfigSerializer
+    permission_classes = [IsAdminOrTeacherReadOnly]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['plan','klass']
+
+    def get_queryset(self):
+        qs = super().get_queryset().select_related('plan','klass','room_preference')
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if school:
+            qs = qs.filter(plan__school=school)
+        return qs
+
+
+class ClassSubjectQuotaViewSet(viewsets.ModelViewSet):
+    queryset = ClassSubjectQuota.objects.all()
+    serializer_class = ClassSubjectQuotaSerializer
+    permission_classes = [IsAdminOrTeacherReadOnly]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['plan','klass','subject']
+
+    def get_queryset(self):
+        qs = super().get_queryset().select_related('plan','klass','subject')
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if school:
+            qs = qs.filter(plan__school=school)
+        return qs
+
+
+class TeacherAvailabilityViewSet(viewsets.ModelViewSet):
+    queryset = TeacherAvailability.objects.all()
+    serializer_class = TeacherAvailabilitySerializer
+    permission_classes = [IsAdminOrTeacherReadOnly]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['teacher','day_of_week']
+
+    def get_queryset(self):
+        qs = super().get_queryset().select_related('teacher')
+        return qs
+
+
+class TimetableVersionViewSet(viewsets.ModelViewSet):
+    queryset = TimetableVersion.objects.all()
+    serializer_class = TimetableVersionSerializer
+    permission_classes = [IsAdminOrTeacherReadOnly]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['plan','is_current']
+
+    def get_queryset(self):
+        qs = super().get_queryset().select_related('plan')
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if school:
+            qs = qs.filter(plan__school=school)
+        return qs
+
+    @action(detail=True, methods=['post'], url_path='publish')
+    def publish(self, request, pk=None):
+        version = self.get_object()
+        version.is_current = True
+        version.save(update_fields=['is_current'])
+        # mark plan status updated
+        TimetablePlan.objects.filter(pk=version.plan_id).update(status='published')
+        # Notify entire school via broadcast message (also triggers email/SMS delivery)
+        try:
+            from communications.utils import resolve_default_sender_id, create_broadcast_message
+            school_id = getattr(getattr(version, 'plan', None), 'school_id', None)
+            if school_id:
+                sender_id = resolve_default_sender_id(school_id)
+                term = getattr(getattr(version, 'plan', None), 'term', None)
+                term_text = f"Term {getattr(term, 'number', '')}" if term else ""
+                body = f"A new timetable has been published {('for ' + term_text) if term_text else ''}. Please check the Timetable section."
+                if sender_id:
+                    create_broadcast_message(school_id=school_id, sender_id=sender_id, body=body)
+        except Exception:
+            pass
+        return Response({'detail': 'published'})

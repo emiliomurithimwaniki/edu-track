@@ -90,3 +90,60 @@ class Payment(models.Model):
     def __str__(self):
         return f"Payment {self.amount} for Invoice {self.invoice_id}"
 
+
+class ExpenseCategory(models.Model):
+    """A category for expenses, e.g., Salaries, Utilities, Supplies."""
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    school = models.ForeignKey('accounts.School', on_delete=models.CASCADE, related_name='expense_categories')
+
+    class Meta:
+        unique_together = ("school", "name")
+        verbose_name_plural = "Expense Categories"
+
+    def __str__(self):
+        return self.name
+
+
+class Expense(models.Model):
+    """Represents a single expense record."""
+    school = models.ForeignKey('accounts.School', on_delete=models.CASCADE, related_name='expenses')
+    category = models.ForeignKey(ExpenseCategory, on_delete=models.PROTECT, related_name='expenses')
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    description = models.TextField()
+    date = models.DateField()
+    attachment = models.FileField(upload_to='expense_attachments/', null=True, blank=True)
+    recorded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Expense: {self.category.name} - {self.amount}"
+
+
+class PocketMoneyWallet(models.Model):
+    """Represents a student's pocket money wallet."""
+    student = models.OneToOneField('academics.Student', on_delete=models.CASCADE, related_name='pocket_money_wallet')
+    balance = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.student.name}'s Wallet (Balance: {self.balance})"
+
+
+class PocketMoneyTransaction(models.Model):
+    """Represents a single transaction (deposit or withdrawal) for a student's wallet."""
+    TRANSACTION_TYPE_CHOICES = (
+        ('deposit', 'Deposit'),
+        ('withdrawal', 'Withdrawal'),
+    )
+    wallet = models.ForeignKey(PocketMoneyWallet, on_delete=models.CASCADE, related_name='transactions')
+    transaction_type = models.CharField(max_length=10, choices=TRANSACTION_TYPE_CHOICES)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    description = models.TextField(blank=True)
+    recorded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.transaction_type.capitalize()} of {self.amount} for {self.wallet.student.name}"
+

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import api from '../api'
 import { useNotification } from '../components/NotificationContext'
 import { useAuth } from '../auth'
@@ -6,6 +7,7 @@ import { useAuth } from '../auth'
 export default function Messages(){
   const { user } = useAuth()
   const { showSuccess, showError } = useNotification()
+  const location = useLocation()
   const [inbox, setInbox] = useState([])
   const [outbox, setOutbox] = useState([])
   const [loading, setLoading] = useState(true)
@@ -78,6 +80,76 @@ export default function Messages(){
   }
 
   useEffect(() => { loadMessages(false); loadUsers(''); loadSystem() }, [])
+  // Merge message participants (from inbox/outbox) into allUsers so deep-links can resolve
+  useEffect(() => {
+    if ((!Array.isArray(inbox) || inbox.length === 0) && (!Array.isArray(outbox) || outbox.length === 0)) return
+    const byId = new Map((allUsers||[]).map(u => [u.id, u]))
+    // from inbound messages: sender_detail
+    for (const m of inbox || []){
+      const d = m?.sender_detail
+      if (d && d.id && !byId.has(d.id)) byId.set(d.id, d)
+    }
+    // from outbound messages: recipients[].user_detail
+    for (const m of outbox || []){
+      const recs = Array.isArray(m?.recipients) ? m.recipients : []
+      for (const r of recs){
+        const d = r?.user_detail
+        const id = r?.user || d?.id
+        if (id && !byId.has(id)) byId.set(id, d || { id })
+      }
+    }
+    const merged = Array.from(byId.values()).filter(Boolean)
+    // Only update if there is any new id
+    if (merged.length !== (allUsers||[]).length){
+      setAllUsers(merged)
+    }
+  }, [inbox, outbox])
+  // Deep-linking: open user or switch tab via query params
+  const desiredUserIdRef = useRef(null)
+  useEffect(() => {
+    try{
+      const sp = new URLSearchParams(location.search)
+      const tab = sp.get('tab')
+      const openUserId = sp.get('openUserId')
+      if (tab === 'system') setViewTab('system')
+      if (openUserId) {
+        const idNum = Number(openUserId)
+        if(!Number.isNaN(idNum)){
+          desiredUserIdRef.current = idNum
+        }
+      }
+    }catch{}
+  }, [location.search])
+  // When users list loads/changes, apply desired open user if any
+  useEffect(() => {
+    if(!desiredUserIdRef.current) return
+    const target = allUsers.find(u => u.id === desiredUserIdRef.current)
+    if (target){
+      setActiveUser(target)
+      setViewTab('chats')
+      desiredUserIdRef.current = null
+      return
+    }
+    // Fallback: try derive from inbox/outbox details without waiting for directory
+    const fromInbox = (inbox||[]).find(m => m.sender === desiredUserIdRef.current)?.sender_detail
+    if (fromInbox && fromInbox.id){
+      setActiveUser(fromInbox)
+      setViewTab('chats')
+      desiredUserIdRef.current = null
+      return
+    }
+    // Fallback 2: from outbox recipients
+    for (const m of outbox || []){
+      const hit = (m.recipients||[]).find(r => r.user === desiredUserIdRef.current)
+      if (hit){
+        const u = hit.user_detail || { id: hit.user }
+        setActiveUser(u)
+        setViewTab('chats')
+        desiredUserIdRef.current = null
+        return
+      }
+    }
+  }, [allUsers])
   // Background refresh of user directory every 60s
   useEffect(() => {
     const id = setInterval(() => loadUsers(''), 60000)
@@ -129,6 +201,32 @@ export default function Messages(){
     return m
   }, [allUsers, userMeta])
 
+  // Aggregate unread counts for tabs
+  const chatsUnread = useMemo(() => {
+    const myId = user?.id
+    if (!Array.isArray(inbox) || !myId) return 0
+    return inbox.reduce((acc, m) => {
+      // Only non-system messages counted in Chats
+      if (m && !m.system_tag && Array.isArray(m.recipients)){
+        const rec = m.recipients.find(r => r.user === myId)
+        if (rec && !rec.read) return acc + 1
+      }
+      return acc
+    }, 0)
+  }, [inbox, user])
+
+  const systemUnread = useMemo(() => {
+    const myId = user?.id
+    if (!Array.isArray(systemMessages) || !myId) return 0
+    return systemMessages.reduce((acc, m) => {
+      if (Array.isArray(m.recipients)){
+        const rec = m.recipients.find(r => r.user === myId)
+        if (rec && !rec.read) return acc + 1
+      }
+      return acc
+    }, 0)
+  }, [systemMessages, user])
+
   // Sort users by last message timestamp (desc), place those without messages at the bottom
   const filteredUsers = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -159,6 +257,7 @@ export default function Messages(){
 
   // Typing simulation (client-only): show typing for partner occasionally while chat is open
   const [typingMap, setTypingMap] = useState(new Map())
+  const [showUsersMobile, setShowUsersMobile] = useState(false)
   useEffect(() => {
     if (!activeUser) return
     const id = setInterval(() => {
@@ -293,10 +392,20 @@ export default function Messages(){
   return (
     <div className="h-[calc(100vh-6rem)] bg-white border rounded-md overflow-hidden flex">
       {/* Left: Users list */}
-      <aside className="w-80 border-r flex flex-col">
+      <aside className="hidden sm:flex w-80 border-r flex-col">
         <div className="flex border-b">
-          <button onClick={()=>setViewTab('chats')} className={`flex-1 px-3 py-2 text-sm ${viewTab==='chats'?'border-b-2 border-blue-600 font-medium':''}`}>Chats</button>
-          <button onClick={()=>setViewTab('system')} className={`flex-1 px-3 py-2 text-sm ${viewTab==='system'?'border-b-2 border-blue-600 font-medium':''}`}>System</button>
+          <button onClick={()=>setViewTab('chats')} className={`flex-1 px-3 py-2 text-sm flex items-center justify-center gap-2 ${viewTab==='chats'?'border-b-2 border-blue-600 font-medium':''}`}>
+            <span>Chats</span>
+            {chatsUnread>0 && (
+              <span className="text-[10px] bg-blue-600 text-white rounded-full px-2 py-0.5">{chatsUnread>99?'99+':chatsUnread}</span>
+            )}
+          </button>
+          <button onClick={()=>setViewTab('system')} className={`flex-1 px-3 py-2 text-sm flex items-center justify-center gap-2 ${viewTab==='system'?'border-b-2 border-blue-600 font-medium':''}`}>
+            <span>System</span>
+            {systemUnread>0 && (
+              <span className="text-[10px] bg-blue-600 text-white rounded-full px-2 py-0.5">{systemUnread>99?'99+':systemUnread}</span>
+            )}
+          </button>
           {isAdmin && (
             <>
               <button onClick={()=>setViewTab('role')} className={`flex-1 px-3 py-2 text-sm ${viewTab==='role'?'border-b-2 border-blue-600 font-medium':''}`}>Role</button>
@@ -382,9 +491,12 @@ export default function Messages(){
 
       {/* Right: Chat thread or System feed */}
       <section className="flex-1 flex flex-col">
-        <div className="h-14 border-b px-4 flex items-center justify-between">
+        <div className="h-14 border-b px-2 sm:px-4 flex items-center justify-between sticky top-0 bg-white z-10">
           <div className="font-medium">
-            {viewTab==='system' ? 'System' : (activeUser ? (activeUser.first_name || activeUser.username) : 'Select a user')}
+            <div className="flex items-center gap-2">
+              <button className="sm:hidden px-2 py-1 rounded border" onClick={()=>setShowUsersMobile(true)}>Users</button>
+              <span>{viewTab==='system' ? 'System' : (activeUser ? (activeUser.first_name || activeUser.username) : 'Select a user')}</span>
+            </div>
           </div>
           <div className="flex items-center gap-2 text-xs text-gray-500">
             {viewTab==='system' ? (
@@ -403,7 +515,7 @@ export default function Messages(){
             )}
           </div>
         </div>
-        <div ref={chatRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-2 bg-gray-50">
+        <div ref={chatRef} className="flex-1 overflow-y-auto px-2 sm:px-4 py-3 space-y-2 bg-gray-50">
           {loading && viewTab!=='system' && <div className="text-sm text-gray-500">Loading...</div>}
           {viewTab==='system' ? (
             <div className="space-y-2">
@@ -429,7 +541,7 @@ export default function Messages(){
                 const mine = m.sender === user?.id
                 return (
                   <div key={m.id} className={`flex ${mine? 'justify-end':'justify-start'}`}>
-                    <div className={`max-w-[70%] px-3 py-2 rounded-lg shadow-sm text-sm whitespace-pre-wrap ${mine? 'bg-blue-600 text-white':'bg-white border'}`}>
+                    <div className={`max-w-[85%] sm:max-w-[70%] px-3 py-2 rounded-lg shadow-sm text-sm whitespace-pre-wrap ${mine? 'bg-blue-600 text-white':'bg-white border'}`}>
                       {m.body}
                       <div className={`mt-1 text-[10px] ${mine? 'text-white/80':'text-gray-500'}`}>{new Date(m.created_at).toLocaleString()}</div>
                     </div>
@@ -444,7 +556,7 @@ export default function Messages(){
           <span />
         </div>
         {viewTab!=='system' && (
-        <form onSubmit={sendToActive} className="h-16 border-t p-2 flex gap-2">
+        <form onSubmit={sendToActive} className="h-16 border-t p-2 flex gap-2 sticky bottom-0 bg-white">
           <input
             value={message}
             onChange={e=>setMessage(e.target.value)}
@@ -452,10 +564,49 @@ export default function Messages(){
             className="flex-1 border rounded px-3"
             disabled={!activeUser}
           />
-          <button disabled={!activeUser || sending || !message.trim()} className="px-4 rounded bg-blue-600 text-white disabled:opacity-50">Send</button>
+          <button disabled={!activeUser || sending || !message.trim()} className="px-4 rounded bg-blue-600 text-white disabled:opacity-50">{sending? 'Sending…':'Send'}</button>
         </form>
         )}
       </section>
+
+      {/* Mobile slide-over for Users */}
+      {showUsersMobile && (
+        <div className="sm:hidden fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/40" onClick={()=>setShowUsersMobile(false)} />
+          <div className="absolute left-0 top-0 bottom-0 w-[85%] max-w-xs bg-white border-r shadow-xl flex flex-col">
+            <div className="flex items-center justify-between px-3 h-12 border-b">
+              <div className="font-medium">Users</div>
+              <button className="px-2 py-1 rounded border" onClick={()=>setShowUsersMobile(false)}>Close</button>
+            </div>
+            {/* Reuse the same sidebar content */}
+            <div className="flex-1 overflow-y-auto">
+              <div className="p-3 border-b">
+                <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search users..." className="w-full border rounded px-3 py-2" />
+              </div>
+              {sortedUsers.map(u => {
+                const isActive = activeUser?.id === u.id
+                const meta = userMeta.get(u.id)
+                const lastText = meta?.last?.body ? String(meta.last.body).slice(0, 40) : ''
+                const unread = meta?.unread || 0
+                const online = presenceMap.get(u.id)
+                return (
+                  <button key={u.id} onClick={()=>{ setActiveUser(u); setViewTab('chats'); setShowUsersMobile(false) }} className={`w-full text-left px-3 py-2 border-b hover:bg-gray-50 ${isActive? 'bg-blue-50':''}`}>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${online? 'bg-emerald-500':'bg-gray-300'}`}></span>
+                        <div className="font-medium text-sm">{u.first_name || u.username}</div>
+                      </div>
+                      {unread>0 && (<span className="text-[10px] bg-blue-600 text-white rounded-full px-2 py-0.5">{unread}</span>)}
+                    </div>
+                    <div className="text-xs text-gray-500 truncate">{lastText || <span className="italic text-gray-400">No messages</span>}</div>
+                  </button>
+                )
+              })}
+              {sortedUsers.length===0 && (<div className="p-3 text-sm text-gray-500">No users</div>)}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

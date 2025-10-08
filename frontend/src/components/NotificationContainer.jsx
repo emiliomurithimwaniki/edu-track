@@ -1,7 +1,8 @@
 import React from 'react'
 import { useNotification } from './NotificationContext'
+import { useNavigate } from 'react-router-dom'
 
-const NotificationItem = ({ notification, onClose }) => {
+const NotificationItem = ({ notification, onClose, onActivate }) => {
   const getNotificationStyles = (type) => {
     const baseStyles = "flex items-start gap-3 p-4 rounded-lg shadow-lg border-l-4 min-w-[320px] max-w-[400px]"
 
@@ -59,7 +60,12 @@ const NotificationItem = ({ notification, onClose }) => {
   return (
     <div className={getNotificationStyles(notification.type)}>
       {getIcon(notification.type)}
-      <div className="flex-1 min-w-0">
+      <div
+        className={`flex-1 min-w-0 ${notification.route || notification.onClick ? 'cursor-pointer':''}`}
+        onClick={()=>{ if(onActivate){ onActivate(notification) } }}
+        role={notification.route || notification.onClick ? 'button' : undefined}
+        tabIndex={notification.route || notification.onClick ? 0 : undefined}
+      >
         {notification.title && (
           <div className="font-semibold text-sm mb-1">
             {notification.title}
@@ -86,6 +92,7 @@ const NotificationItem = ({ notification, onClose }) => {
 
 export default function NotificationContainer() {
   const { notifications, removeNotification } = useNotification()
+  const navigate = useNavigate()
 
   if (notifications.length === 0) {
     return null
@@ -105,6 +112,17 @@ export default function NotificationContainer() {
           <NotificationItem
             notification={notification}
             onClose={removeNotification}
+            onActivate={(n)=>{
+              try{
+                if(typeof n.onClick === 'function'){
+                  n.onClick()
+                } else if(n.route){
+                  navigate(n.route)
+                }
+              } finally {
+                removeNotification(n.id)
+              }
+            }}
           />
         </div>
       ))}

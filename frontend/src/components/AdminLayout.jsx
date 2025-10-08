@@ -13,6 +13,7 @@ const navItems = [
   { to: '/admin/exams', label: 'Exams', icon: '📝' },
   { to: '/admin/reports', label: 'Reports', icon: '📈' },
   { to: '/admin/events', label: 'Events', icon: '📅' },
+  { to: '/admin/timetable', label: 'Timetable', icon: '📆' },
   { to: '/admin/messages', label: 'Messages', icon: '✉️' },
 ]
 
@@ -26,6 +27,7 @@ export default function AdminLayout({ children }){
   const [schoolLogo, setSchoolLogo] = useState('')
   const [currentTerm, setCurrentTerm] = useState(null)
   const [currentYear, setCurrentYear] = useState(null)
+  const [unreadCount, setUnreadCount] = useState(0)
 
   // Close mobile drawer on route change
   useEffect(() => { setIsMobileOpen(false) }, [pathname])
@@ -46,6 +48,38 @@ export default function AdminLayout({ children }){
     })()
     return () => { mounted = false }
   }, [])
+
+  // Poll unread messages (inbox + system)
+  useEffect(() => {
+    let mounted = true
+    const computeUnread = (arr) => {
+      const myId = user?.id
+      if (!Array.isArray(arr) || !myId) return 0
+      return arr.reduce((acc, m) => {
+        const rec = Array.isArray(m.recipients) ? m.recipients : []
+        const mine = rec.find(r => r.user === myId)
+        return acc + (mine && !mine.read ? 1 : 0)
+      }, 0)
+    }
+    const load = async () => {
+      try {
+        const [inb, sys] = await Promise.allSettled([
+          api.get('/communications/messages/'),
+          api.get('/communications/messages/system/'),
+        ])
+        const inboxList = inb.status === 'fulfilled' ? (Array.isArray(inb.value.data) ? inb.value.data : (inb.value.data?.results || [])) : []
+        const sysList = sys.status === 'fulfilled' ? (Array.isArray(sys.value.data) ? sys.value.data : (sys.value.data?.results || [])) : []
+        const total = computeUnread(inboxList) + computeUnread(sysList)
+        if (mounted) setUnreadCount(total)
+      } catch {
+        if (mounted) setUnreadCount(0)
+      }
+    }
+    // initial
+    load()
+    const id = setInterval(load, 15000)
+    return () => { mounted = false; clearInterval(id) }
+  }, [user])
 
   // Load current term and year for header display
   useEffect(() => {
@@ -172,8 +206,13 @@ export default function AdminLayout({ children }){
                 >
                   <span className="text-lg w-5 text-center">{i.icon}</span>
                   {isOpen && (
-                    <span className="text-sm font-medium truncate transition-all duration-300 group-hover:translate-x-1">
+                    <span className="relative inline-flex items-center gap-2 text-sm font-medium truncate transition-all duration-300 group-hover:translate-x-1">
                       {i.label}
+                      {i.label === 'Messages' && unreadCount > 0 && (
+                        <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] bg-red-600 text-white">
+                          {unreadCount > 99 ? '99+' : unreadCount}
+                        </span>
+                      )}
                     </span>
                   )}
                 </Link>
@@ -203,7 +242,14 @@ export default function AdminLayout({ children }){
                   } flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-300`}
                 >
                   <span className="text-lg">{i.icon}</span>
-                  <span className="text-sm font-medium">{i.label}</span>
+                  <span className="relative inline-flex items-center gap-2 text-sm font-medium">
+                    {i.label}
+                    {i.label === 'Messages' && unreadCount > 0 && (
+                      <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] bg-red-600 text-white">
+                        {unreadCount > 99 ? '99+' : unreadCount}
+                      </span>
+                    )}
+                  </span>
                 </Link>
               )
             })}

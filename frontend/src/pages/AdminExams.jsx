@@ -10,6 +10,7 @@ export default function AdminExams(){
   const [classes, setClasses] = useState([])
   const [subjects, setSubjects] = useState([])
   const [students, setStudents] = useState([])
+  const [modalSubjects, setModalSubjects] = useState([]) // subjects for selected exam/class
 
   const [showCreateExam, setShowCreateExam] = useState(false)
   const [showEnterResults, setShowEnterResults] = useState(false)
@@ -71,10 +72,25 @@ export default function AdminExams(){
     setStudents(st.data)
     // initialize results grid: each student x each subject in class subjects
     const klass = classes.find(c => c.id === exam.klass)
-    const subjectIds = Array.isArray(klass?.subjects) ? klass.subjects.map(s=>s.id) : []
+    const subjObjs = Array.isArray(klass?.subjects) ? klass.subjects : []
+    const subjectIds = subjObjs.map(s=>s.id)
+    setModalSubjects(subjObjs)
+    // Prefill with existing results for this exam
+    let existing = []
+    try{
+      const { data } = await api.get(`/academics/exam_results/?exam=${exam.id}`)
+      existing = Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : [])
+    }catch{}
+    const existingMap = new Map()
+    existing.forEach(r => {
+      existingMap.set(`${r.student}-${r.subject}`, r.marks)
+    })
     const rows = []
     for (const s of st.data) {
-      for (const sid of subjectIds) rows.push({ student: s.id, subject: sid, marks: '' })
+      for (const sid of subjectIds) {
+        const key = `${s.id}-${sid}`
+        rows.push({ student: s.id, subject: sid, marks: existingMap.has(key) ? existingMap.get(key) : '' })
+      }
     }
     setResults(rows)
     setShowEnterResults(true)
@@ -110,6 +126,7 @@ export default function AdminExams(){
     try {
       // Convert results to API format
       const payload = results.map(r => ({
+        exam: selectedExam.id,
         student: r.student,
         subject: r.subject,
         marks: parseFloat(r.marks) || 0
@@ -163,7 +180,7 @@ export default function AdminExams(){
                   </td>
                   <td>
                     <div className="flex gap-3">
-                      <button onClick={()=>openResults(e)} className="text-blue-600">Enter Results</button>
+                      <button onClick={()=>navigate(`/admin/exams/${e.id}/enter`)} className="text-blue-600">Enter Results</button>
                       <button onClick={()=>viewResults(e)} className="text-green-700">View Results</button>
                       <button onClick={()=>navigate(`/admin/results?exam=${e.id}&grade=${encodeURIComponent(classes.find(c=>c.id===e.klass)?.grade_level || '')}`)} className="text-indigo-700">Results Page</button>
                       <button
@@ -217,7 +234,7 @@ export default function AdminExams(){
               <thead>
                 <tr>
                   <th className="border px-2 py-1 text-left">Student</th>
-                  {subjects.map(s => (
+                  {modalSubjects.map(s => (
                     <th key={s.id} className="border px-2 py-1 text-left">{s.code}</th>
                   ))}
                 </tr>
@@ -226,7 +243,7 @@ export default function AdminExams(){
                 {students.map(stu => (
                   <tr key={stu.id}>
                     <td className="border px-2 py-1">{stu.name}</td>
-                    {subjects.map(s => {
+                    {modalSubjects.map(s => {
                       const idx = results.findIndex(r => r.student===stu.id && r.subject===s.id)
                       const val = idx>-1 ? results[idx].marks : ''
                       return (

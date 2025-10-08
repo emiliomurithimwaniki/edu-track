@@ -113,59 +113,153 @@ def send_sms(phone: str, message: str) -> bool:
         logger.warning("Africa's Talking credentials missing; skipping SMS to %s", phone)
         return False
     # Normalize phone into E.164 if possible (defaults to KE)
+    # Normalize and validate phone (default region KE)
+    valid_number = False
     try:
         region = 'KE'
-        if phone and not phone.startswith('+'):
-            parsed = phonenumbers.parse(phone, region)
-        else:
-            parsed = phonenumbers.parse(phone)
+        parsed = phonenumbers.parse(phone, region) if (phone and not phone.startswith('+')) else phonenumbers.parse(phone)
         if phonenumbers.is_valid_number(parsed):
             phone = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
+            valid_number = True
     except Exception:
-        pass
+        valid_number = False
+    if not valid_number:
+        # If loopback is enabled, simulate success to avoid blocking user flows in dev/demo
+        if getattr(settings, 'SMS_LOOPBACK', False):
+            logger.info("SMS_LOOPBACK enabled: accepting invalid phone '%s' as sent", phone)
+            return True
+        logger.warning("SMS not sent: invalid phone '%s' and SMS_LOOPBACK is disabled", phone)
+        return False
     try:
-        # If sandbox, use REST directly to avoid Whatsapp sandbox error in SDK
-        if str(at_username).lower() == 'sandbox':
-            return _send_sms_via_at_rest(at_username, at_api_key, phone, message, at_sender)
+        use_rest_pref = getattr(settings, 'AT_USE_REST_FOR_SANDBOX', True)
+        is_sandbox = str(at_username).lower() == 'sandbox'
 
-        # Import lazily to avoid hard dependency when not configured
+        # Strategy on sandbox:
+        # - If AT_USE_REST_FOR_SANDBOX True: try REST first, then SDK fallback on SSL/proxy errors
+        # - If False: try SDK first, then REST fallback
+        if is_sandbox:
+            if use_rest_pref:
+                ok = _send_sms_via_at_rest(at_username, at_api_key, phone, message, at_sender)
+                if ok:
+                    return True
+                # Fallback to SDK once
+                try:
+                    import africastalking  # type: ignore
+                    africastalking.initialize(at_username, at_api_key)
+                    sms = africastalking.SMS
+                    resp = sms.send(message, [phone], at_sender) if at_sender else sms.send(message, [phone])
+                    recipients = (resp or {}).get('SMSMessageData', {}).get('Recipients', [])
+                    if recipients and 'success' in (recipients[0].get('status','').lower()):
+                        logger.info("SMS sent via AT SDK fallback -> %s", phone)
+                        return True
+                except Exception:
+                    logger.exception("AT SDK fallback failed on sandbox")
+                return False
+            else:
+                # Prefer SDK first
+                try:
+                    import africastalking  # type: ignore
+                    africastalking.initialize(at_username, at_api_key)
+                    sms = africastalking.SMS
+                    resp = sms.send(message, [phone], at_sender) if at_sender else sms.send(message, [phone])
+                    recipients = (resp or {}).get('SMSMessageData', {}).get('Recipients', [])
+                    if recipients and 'success' in (recipients[0].get('status','').lower()):
+                        logger.info("SMS sent via AT SDK (sandbox) -> %s", phone)
+                        return True
+                except Exception as e:
+                    # Known WhatsApp sandbox error or TLS anomalies -> fallback to REST
+                    logger.warning("AT SDK on sandbox error; falling back to REST: %s", e)
+                return _send_sms_via_at_rest(at_username, at_api_key, phone, message, at_sender)
+
+        # Live mode: use official SDK
         import africastalking  # type: ignore
         africastalking.initialize(at_username, at_api_key)
         sms = africastalking.SMS
-        # Africa's Talking expects list of recipients
         resp = sms.send(message, [phone], at_sender) if at_sender else sms.send(message, [phone])
-        # Basic acceptance check
         recipients = (resp or {}).get('SMSMessageData', {}).get('Recipients', [])
         if recipients:
             status = recipients[0].get('status', '').lower()
             if 'success' in status:
-                logger.info("SMS sent via AT -> %s: %s", phone, status)
+                logger.info("SMS sent via AT (live) -> %s: %s", phone, status)
                 return True
-        logger.warning("AT SDK response did not confirm success: %s", resp)
+        logger.warning("AT SDK (live) response did not confirm success: %s", resp)
         return False
-    except Exception as e:
-        # If the SDK fails due to WhatsApp sandbox limitation, fall back to REST
-        if 'Sandbox is currently not available for this service' in str(e):
-            logger.warning("AT SDK raised WhatsApp sandbox error; falling back to REST")
-            return _send_sms_via_at_rest(at_username, at_api_key, phone, message, at_sender)
+    except Exception:
         logger.exception("Failed to send SMS via Africa's Talking to %s", phone)
+        # Final guard: allow loopback to simulate success in dev
+        if getattr(settings, 'SMS_LOOPBACK', False):
+            logger.info("SMS_LOOPBACK enabled: simulating success for %s after failure", phone)
+            return True
         return False
 
 
 def send_email_safe(subject: str, message: str, recipient: str) -> bool:
     if not recipient:
         return False
+    host_user = getattr(settings, 'EMAIL_HOST_USER', '')
+    host_pass = getattr(settings, 'EMAIL_HOST_PASSWORD', '')
+    if not host_user or not host_pass:
+        logger.warning("Email credentials missing; skipping email to %s", recipient)
+        return False
+    from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', host_user or 'no-reply@example.com')
+
+    # 1) Try using current Django settings (usually TLS on 587)
     try:
-        host_user = getattr(settings, 'EMAIL_HOST_USER', '')
-        host_pass = getattr(settings, 'EMAIL_HOST_PASSWORD', '')
-        if not host_user or not host_pass:
-            logger.warning("Email credentials missing; skipping email to %s", recipient)
-            return False
-        from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', host_user or 'no-reply@example.com')
         sent = send_mail(subject or 'Notification', message, from_email, [recipient], fail_silently=False)
-        return sent > 0
+        if sent > 0:
+            return True
     except Exception as e:
-        logger.exception("Failed to send email to %s: %s", recipient, e)
+        logger.warning("Primary SMTP send failed (TLS/port from settings): %s", e)
+
+    # 2) Fallback: explicit TLS on 587 using a new connection
+    try:
+        from django.core.mail import get_connection
+        conn = get_connection(
+            host=getattr(settings, 'EMAIL_HOST', 'smtp.gmail.com'),
+            port=int(getattr(settings, 'EMAIL_PORT', 587) or 587),
+            username=host_user,
+            password=host_pass,
+            use_tls=True,
+            use_ssl=False,
+            timeout=20,
+        )
+        conn.open()
+        try:
+            email = EmailMessage(subject or 'Notification', message or '', from_email, [recipient], connection=conn)
+            email.send(fail_silently=False)
+            return True
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning("SMTP TLS fallback failed: %s", e)
+
+    # 3) Final fallback: SSL on 465 (useful when 587 is blocked or intercepted)
+    try:
+        from django.core.mail import get_connection
+        conn = get_connection(
+            host=getattr(settings, 'EMAIL_HOST', 'smtp.gmail.com'),
+            port=465,
+            username=host_user,
+            password=host_pass,
+            use_tls=False,
+            use_ssl=True,
+            timeout=20,
+        )
+        conn.open()
+        try:
+            email = EmailMessage(subject or 'Notification', message or '', from_email, [recipient], connection=conn)
+            email.send(fail_silently=False)
+            return True
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.exception("All SMTP attempts failed for %s: %s", recipient, e)
         return False
 
 
@@ -212,8 +306,8 @@ def process_arrears_campaign(campaign_id: int):
         ).annotate(balance=F('billed') - F('paid')).filter(balance__gte=campaign.min_balance)
 
         notifications = []
-        # Prepare personalized chat messages: list of (user_id, body)
-        personalized_pairs = []
+        # Prepare personalized chat messages only if in-app is selected
+        personalized_pairs = [] if campaign.send_in_app else None
         count = 0
         sms_sent = 0
         sms_failed = 0
@@ -234,13 +328,17 @@ def process_arrears_campaign(campaign_id: int):
                 notifications.append(Notification(user_id=stu.user_id, message=msg, type='in_app'))
                 count += 1
 
-            # Always mirror to chat for any student that has a linked user
-            if getattr(stu, 'user_id', None):
+            # Mirror to chat only when in-app selected, so it shows in Messages UI
+            if campaign.send_in_app and getattr(stu, 'user_id', None) and personalized_pairs is not None:
                 personalized_pairs.append((stu.user_id, msg))
 
-            # SMS
+            # SMS: prefer guardian phone, then student phone, then linked user phone
             if campaign.send_sms:
-                phone = getattr(stu, 'phone', None) or getattr(getattr(stu, 'user', None), 'phone', None)
+                phone = (
+                    getattr(stu, 'guardian_id', None)
+                    or getattr(stu, 'phone', None)
+                    or getattr(getattr(stu, 'user', None), 'phone', None)
+                )
                 if phone:
                     ok = False
                     try:
@@ -284,6 +382,7 @@ def process_arrears_campaign(campaign_id: int):
                         sender_id=sender_id,
                         user_body_pairs=personalized_pairs,
                         system_tag='arrears',
+                        queue_delivery=False,  # do not trigger email/SMS from chat mirror; channels are independent
                     )
         except Exception:
             logger.exception("Failed to mirror arrears campaign to chat messages")
@@ -359,10 +458,10 @@ def queue_message_delivery(message_id: int):
     t.start()
 
 
-def create_messages_for_users(school_id: int, sender_id: int, body: str, recipient_user_ids: list[int], system_tag: str | None = None):
+def create_messages_for_users(school_id: int, sender_id: int, body: str, recipient_user_ids: list[int], system_tag: str | None = None, *, queue_delivery: bool = True):
     """Create Message rows (one per recipient) and associated MessageRecipient rows.
-    This mirrors system notifications (like arrears) into the chat so they appear in the Messages UI.
-    Also queues email/SMS delivery for each created message.
+    Mirrors notifications into the chat so they appear in the Messages UI.
+    When queue_delivery is True (default), also queue email/SMS delivery for each created message.
     """
     from .models import Message, MessageRecipient
     if not recipient_user_ids:
@@ -378,18 +477,21 @@ def create_messages_for_users(school_id: int, sender_id: int, body: str, recipie
                 system_tag=system_tag,
             )
             MessageRecipient.objects.create(message=msg, user_id=uid)
-            try:
-                queue_message_delivery(msg.id)
-            except Exception:
-                pass
+            if queue_delivery:
+                try:
+                    queue_message_delivery(msg.id)
+                except Exception:
+                    pass
             created += 1
         except Exception:
             logger.exception("Failed to create chat message for user %s", uid)
     return created
 
 
-def create_personalized_messages_for_users(school_id: int, sender_id: int, user_body_pairs: list[tuple[int, str]], system_tag: str | None = None):
-    """Create per-user Message with its own body and queue delivery. user_body_pairs: [(user_id, body), ...]"""
+def create_personalized_messages_for_users(school_id: int, sender_id: int, user_body_pairs: list[tuple[int, str]], system_tag: str | None = None, *, queue_delivery: bool = True):
+    """Create per-user Message with its own body. user_body_pairs: [(user_id, body), ...].
+    When queue_delivery is True (default), queues email/SMS delivery for each created message.
+    """
     from .models import Message, MessageRecipient
     created = 0
     for uid, body in user_body_pairs:
@@ -401,10 +503,11 @@ def create_personalized_messages_for_users(school_id: int, sender_id: int, user_
                 audience=Message.Audience.USERS,
             )
             MessageRecipient.objects.create(message=msg, user_id=uid)
-            try:
-                queue_message_delivery(msg.id)
-            except Exception:
-                pass
+            if queue_delivery:
+                try:
+                    queue_message_delivery(msg.id)
+                except Exception:
+                    pass
             created += 1
         except Exception:
             logger.exception("Failed to create personalized chat message for user %s", uid)
@@ -436,6 +539,132 @@ def create_message_for_role(school_id: int, sender_id: int, body: str, role: str
     except Exception:
         pass
     return msg.id
+
+
+def notify_enrollment(student) -> bool:
+    """Send notifications after successful enrollment (Student creation).
+    Attempts SMS, email, in-app Notification, and mirrors to chat Messages if a linked user exists.
+    """
+    try:
+        from .models import Notification
+        # Build context
+        student_name = getattr(student, 'name', 'Student')
+        klass_name = getattr(getattr(student, 'klass', None), 'name', '')
+        school = getattr(getattr(student, 'klass', None), 'school', None)
+        school_id = getattr(school, 'id', None)
+        body = f"Welcome {student_name}! You have been enrolled{(' to ' + klass_name) if klass_name else ''}."
+
+        # In-app notification
+        if getattr(student, 'user_id', None):
+            try:
+                Notification.objects.create(user_id=student.user_id, message=body, type='in_app')
+            except Exception:
+                pass
+
+        # Mirror to chat
+        sender_id = resolve_default_sender_id(school_id) if school_id else None
+        if sender_id and getattr(student, 'user_id', None):
+            try:
+                create_messages_for_users(
+                    school_id=school_id,
+                    sender_id=sender_id,
+                    body=body,
+                    recipient_user_ids=[student.user_id],
+                    system_tag='enrollment',
+                )
+            except Exception:
+                pass
+
+        # SMS
+        phone = getattr(student, 'phone', None) or getattr(getattr(student, 'user', None), 'phone', None)
+        if phone:
+            try:
+                send_sms(phone, body)
+            except Exception:
+                pass
+
+        # Email
+        recipient = getattr(student, 'email', None) or getattr(getattr(student, 'user', None), 'email', None)
+        if recipient:
+            try:
+                subj = f"Enrollment Confirmation{(' - ' + getattr(school,'name','')) if school else ''}"
+                send_email_safe(subj, body, recipient)
+            except Exception:
+                pass
+        return True
+    except Exception:
+        logger.exception("notify_enrollment failed for student %s", getattr(student, 'id', None))
+        return False
+
+
+def notify_payment_received(invoice, payment) -> bool:
+    """Notify student on payment received and updated balance.
+    Sends SMS, Email, in-app Notification and chat mirror where possible.
+    """
+    try:
+        from django.db.models import Sum
+        from .models import Notification
+        student = getattr(invoice, 'student', None)
+        if not student:
+            return False
+        school = getattr(getattr(student, 'klass', None), 'school', None)
+        school_id = getattr(school, 'id', None)
+        # Compute updated totals
+        totals = invoice.payments.aggregate(s=Sum('amount'))
+        total_paid = float(totals.get('s') or 0)
+        total_billed = float(getattr(invoice, 'amount', 0) or 0)
+        balance = round(total_billed - total_paid, 2)
+
+        amt = float(getattr(payment, 'amount', 0) or 0)
+        method = getattr(payment, 'method', 'payment')
+        ref = getattr(payment, 'reference', '')
+        student_name = getattr(student, 'name', 'Student')
+        body = (
+            f"Payment received: {amt:.2f} via {method}" + (f" (Ref: {ref})" if ref else "") +
+            f". Invoice #{invoice.id}. New balance: {balance:.2f}."
+        )
+
+        # In-app notification
+        if getattr(student, 'user_id', None):
+            try:
+                Notification.objects.create(user_id=student.user_id, message=body, type='in_app')
+            except Exception:
+                pass
+
+        # Mirror to chat
+        sender_id = resolve_default_sender_id(school_id) if school_id else None
+        if sender_id and getattr(student, 'user_id', None):
+            try:
+                create_messages_for_users(
+                    school_id=school_id,
+                    sender_id=sender_id,
+                    body=body,
+                    recipient_user_ids=[student.user_id],
+                    system_tag='payment',
+                )
+            except Exception:
+                pass
+
+        # SMS
+        phone = getattr(student, 'phone', None) or getattr(getattr(student, 'user', None), 'phone', None)
+        if phone:
+            try:
+                send_sms(phone, body)
+            except Exception:
+                pass
+
+        # Email
+        recipient = getattr(student, 'email', None) or getattr(getattr(student, 'user', None), 'email', None)
+        if recipient:
+            try:
+                subj = f"Fee payment received - Invoice {invoice.id}"
+                send_email_safe(subj, body, recipient)
+            except Exception:
+                pass
+        return True
+    except Exception:
+        logger.exception("notify_payment_received failed for invoice %s payment %s", getattr(invoice, 'id', None), getattr(payment, 'id', None))
+        return False
 
 
 def resolve_default_sender_id(school_id: int):

@@ -24,6 +24,40 @@ class Command(BaseCommand):
             action='store_true',
             help='Clear existing exam and result data before seeding'
         )
+        # Optional: force the term sequence for exams, e.g. "2,2,3"
+        parser.add_argument(
+            '--force-terms',
+            type=str,
+            default='',
+            help='Comma-separated list of term numbers to cycle through when creating exams (e.g., "2,2,3"). If omitted, terms are random.'
+        )
+        # Optional: exclude subject codes from result creation (e.g., PPI)
+        parser.add_argument(
+            '--exclude-subject-codes',
+            type=str,
+            default='',
+            help='Comma-separated subject codes to exclude from results (e.g., "PPI,ART").'
+        )
+        # Optional: constrain marks to a percentage range of total marks
+        parser.add_argument(
+            '--marks-min',
+            type=float,
+            default=None,
+            help='Minimum percentage for marks (e.g., 40 for 40%). If not set, random performance distribution is used.'
+        )
+        parser.add_argument(
+            '--marks-max',
+            type=float,
+            default=None,
+            help='Maximum percentage for marks (e.g., 96 for 96%). If not set, random performance distribution is used.'
+        )
+        # Optional: force total marks for created exams (default: random choice)
+        parser.add_argument(
+            '--total-marks',
+            type=int,
+            default=None,
+            help='Set a fixed total_marks value for all created exams (e.g., 100).'
+        )
 
     def handle(self, *args, **options):
         fake = Faker()
@@ -32,6 +66,29 @@ class Command(BaseCommand):
 
         exams_per_class = options['exams_per_class']
         clear_data = options['clear']
+        force_terms_raw = options.get('force_terms') or ''
+        exclude_codes_raw = options.get('exclude_subject_codes') or ''
+        marks_min = options.get('marks_min')
+        marks_max = options.get('marks_max')
+        forced_total_marks = options.get('total_marks')
+
+        # Normalize optional args
+        force_terms = []
+        if force_terms_raw.strip():
+            try:
+                force_terms = [int(x.strip()) for x in force_terms_raw.split(',') if x.strip()]
+                # Keep only valid terms 1..3
+                force_terms = [t for t in force_terms if t in (1, 2, 3)]
+            except Exception:
+                force_terms = []
+        exclude_codes = set([c.strip().upper() for c in exclude_codes_raw.split(',') if c.strip()]) if exclude_codes_raw else set()
+
+        # Validate marks bounds
+        if (marks_min is not None and marks_max is None) or (marks_max is not None and marks_min is None):
+            raise SystemExit('--marks-min and --marks-max must be provided together')
+        if marks_min is not None and marks_max is not None:
+            if marks_min < 0 or marks_max > 100 or marks_min > marks_max:
+                raise SystemExit('--marks-min/max must satisfy 0 <= min <= max <= 100')
 
         if clear_data:
             self.stdout.write(self.style.WARNING('Clearing existing exam and result data...'))
@@ -90,30 +147,32 @@ class Command(BaseCommand):
                 
                 if not students:
                     self.stdout.write(self.style.WARNING(f'  No students in {klass.name}'))
-                    continue
 
                 # Create exams for this class
                 for i in range(exams_per_class):
                     # Random exam type
                     exam_name = random.choice(exam_types)
-                    
-                    # Random term and year
-                    term = random.choice(terms)
+
+                    # Term selection: force sequence when provided, else random
+                    if force_terms:
+                        term = force_terms[i % len(force_terms)]
+                    else:
+                        term = random.choice(terms)
                     year = random.choice([current_year - 1, current_year])
-                    
+
                     # Random date within the term (past dates)
                     days_ago = random.randint(1, 180)
                     exam_date = date.today() - timedelta(days=days_ago)
-                    
-                    # Random total marks (usually 100, but can vary)
-                    total_marks = random.choice([50, 100, 150, 200])
+
+                    # Total marks (usually 100, but can vary) or forced
+                    total_marks = forced_total_marks if forced_total_marks is not None else random.choice([50, 100, 150, 200])
                     
                     # Randomly decide if exam is published
                     published = random.choice([True, True, True, False])  # 75% published
                     published_at = timezone.now() if published else None
 
-                    # Create exam
                     try:
+                        # Create exam
                         exam = Exam.objects.create(
                             name=exam_name,
                             year=year,
@@ -129,31 +188,38 @@ class Command(BaseCommand):
                         # Create results for each student in each subject
                         for student in students:
                             for subject in subjects:
+                                # Skip excluded subjects by code (e.g., PPI)
+                                if exclude_codes and str(getattr(subject, 'code', '')).upper() in exclude_codes:
+                                    continue
                                 # Generate realistic marks based on different performance levels
-                                performance_level = random.choices(
-                                    ['excellent', 'good', 'average', 'below_average', 'poor'],
-                                    weights=[0.15, 0.25, 0.35, 0.15, 0.10]
-                                )[0]
-                                
-                                if performance_level == 'excellent':
-                                    # 80-100% of total marks
-                                    marks = random.uniform(0.80 * total_marks, total_marks)
-                                elif performance_level == 'good':
-                                    # 65-79% of total marks
-                                    marks = random.uniform(0.65 * total_marks, 0.79 * total_marks)
-                                elif performance_level == 'average':
-                                    # 50-64% of total marks
-                                    marks = random.uniform(0.50 * total_marks, 0.64 * total_marks)
-                                elif performance_level == 'below_average':
-                                    # 35-49% of total marks
-                                    marks = random.uniform(0.35 * total_marks, 0.49 * total_marks)
-                                else:  # poor
-                                    # 0-34% of total marks
-                                    marks = random.uniform(0, 0.34 * total_marks)
-                                
+                                if marks_min is not None and marks_max is not None:
+                                    # Constrain to percentage window
+                                    lo = (marks_min / 100.0) * float(total_marks)
+                                    hi = (marks_max / 100.0) * float(total_marks)
+                                    marks = random.uniform(lo, hi)
+                                else:
+                                    performance_level = random.choices(
+                                        ['excellent', 'good', 'average', 'below_average', 'poor'],
+                                        weights=[0.15, 0.25, 0.35, 0.15, 0.10]
+                                    )[0]
+                                    if performance_level == 'excellent':
+                                        # 80-100% of total marks
+                                        marks = random.uniform(0.80 * total_marks, total_marks)
+                                    elif performance_level == 'good':
+                                        # 65-79% of total marks
+                                        marks = random.uniform(0.65 * total_marks, 0.79 * total_marks)
+                                    elif performance_level == 'average':
+                                        # 50-64% of total marks
+                                        marks = random.uniform(0.50 * total_marks, 0.64 * total_marks)
+                                    elif performance_level == 'below_average':
+                                        # 35-49% of total marks
+                                        marks = random.uniform(0.35 * total_marks, 0.49 * total_marks)
+                                    else:  # poor
+                                        # 0-34% of total marks
+                                        marks = random.uniform(0, 0.34 * total_marks)
                                 # Round to 1 decimal place
                                 marks = round(marks, 1)
-                                
+
                                 # Some students might be absent (no result)
                                 if random.random() > 0.95:  # 5% absence rate
                                     continue

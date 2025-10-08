@@ -13,6 +13,7 @@ from academics.models import Student
 from .utils import render_template, send_sms, send_email_safe, process_arrears_campaign, queue_message_delivery
 import threading
 from django.utils import timezone
+from django.conf import settings
 
 class NotificationViewSet(viewsets.ModelViewSet):
     queryset = Notification.objects.all()
@@ -134,10 +135,11 @@ class MessageViewSet(viewsets.ModelViewSet):
         # serializer handles school, sender, recipients
         msg = serializer.save()
         # Queue async delivery to email/SMS
-        try:
-            queue_message_delivery(msg.id)
-        except Exception:
-            pass
+        if getattr(settings, 'MESSAGES_QUEUE_DELIVERY', True):
+            try:
+                queue_message_delivery(msg.id)
+            except Exception:
+                pass
 
     @action(detail=False, methods=['get'], url_path='system')
     def system(self, request):

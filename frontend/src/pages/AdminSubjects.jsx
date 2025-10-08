@@ -12,7 +12,7 @@ export default function AdminSubjects(){
   const [creating, setCreating] = useState(false)
   const [loading, setLoading] = useState(true)
 
-  const [newSubject, setNewSubject] = useState({ code: '', name: '' })
+  const [newSubject, setNewSubject] = useState({ code: '', name: '', category: 'other' })
 
   const [classAssign, setClassAssign] = useState({ klass: '', subject_ids: [] })
   const [teacherAssign, setTeacherAssign] = useState({ teacher_id: '', subject_ids: [] })
@@ -43,7 +43,7 @@ export default function AdminSubjects(){
     try {
       setCreating(true)
       await api.post('/academics/subjects/', newSubject)
-      setNewSubject({ code: '', name: '' })
+      setNewSubject({ code: '', name: '', category: 'other' })
       await load()
       showSuccess('Subject Created', 'New subject added to the curriculum')
     } catch (err) {
@@ -94,10 +94,17 @@ export default function AdminSubjects(){
         </div>
 
         {/* Create Subject */}
-        <form onSubmit={createSubject} className="bg-white rounded-xl shadow p-4 md:p-5 grid gap-3 md:grid-cols-4">
+        <form onSubmit={createSubject} className="bg-white rounded-xl shadow p-4 md:p-5 grid gap-3 md:grid-cols-5">
           <div className="md:col-span-4 font-semibold">Create Subject</div>
           <input className="border p-2 rounded" placeholder="Code (e.g., MATH)" value={newSubject.code} onChange={e=>setNewSubject({...newSubject, code:e.target.value})} />
           <input className="border p-2 rounded md:col-span-2" placeholder="Name (e.g., Mathematics)" value={newSubject.name} onChange={e=>setNewSubject({...newSubject, name:e.target.value})} />
+          <select className="border p-2 rounded" value={newSubject.category} onChange={e=>setNewSubject({...newSubject, category:e.target.value})}>
+            <option value="language">Language</option>
+            <option value="science">Science</option>
+            <option value="arts">Arts</option>
+            <option value="humanities">Humanities</option>
+            <option value="other">Other</option>
+          </select>
           <div className="md:col-span-1 flex justify-end">
             <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow" disabled={creating}>{creating? 'Creating...' : 'Add Subject'}</button>
           </div>
@@ -155,7 +162,7 @@ export default function AdminSubjects(){
               <Link key={s.id} to={`/admin/subjects/${s.id}`} className="border rounded p-3 flex items-center justify-between hover:bg-gray-50">
                 <div>
                   <div className="font-medium">{s.name}</div>
-                  <div className="text-xs text-gray-500">{s.code}</div>
+                  <div className="text-xs text-gray-500">{s.code} · {(s.category||'other').toString().replace(/^./,c=>c.toUpperCase())}</div>
                 </div>
               </Link>
             ))}

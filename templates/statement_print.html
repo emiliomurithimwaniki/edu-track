@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Fees Statement - {{student_name}}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --ink:#0f172a;
+    --muted:#6b7280;
+    --line:#e5e7eb;
+    --primary:#165DFF;
+    --accent:#f8fafc;
+    --warn:#b45309;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    font-family:Inter, system-ui, -apple-system, Segoe UI, Arial, sans-serif;
+    color:var(--ink);
+    margin:0; background:#fff;
+  }
+  .page{
+    width:210mm; min-height:297mm; margin:0 auto; padding:24mm 18mm;
+  }
+  .header{
+    display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); padding-bottom:12px; margin-bottom:16px;
+  }
+  .logo{
+    width:48px; height:48px; border-radius:12px; background:linear-gradient(135deg,#165DFF,#3CC9FF);
+  }
+  .school h1{ margin:0; font-size:18px; }
+  .school .meta{ color:var(--muted); font-size:12px; }
+  .doc-title{
+    font-size:22px; margin:8px 0 2px; font-weight:800;
+  }
+  .badge{
+    display:inline-block; font-size:12px; background:var(--accent); border:1px solid var(--line);
+    padding:4px 8px; border-radius:999px; color:#1f2937;
+  }
+  .grid{
+    display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:16px 0;
+  }
+  .card{
+    border:1px solid var(--line); border-radius:12px; padding:12px;
+  }
+  .card h3{
+    margin:0 0 8px; font-size:12px; letter-spacing:.6px; text-transform:uppercase; color:#1f2937;
+  }
+  .row{ display:flex; justify-content:space-between; gap:12px; font-size:13px; margin:3px 0; }
+  .muted{ color:var(--muted); }
+
+  table{ width:100%; border-collapse:collapse; }
+  th, td{ padding:10px; font-size:12.5px; border-bottom:1px solid var(--line); text-align:left; }
+  thead th{ background:#f9fafb; font-weight:700; }
+  tfoot td{ background:#fcfdff; }
+  .right{ text-align:right; }
+  .totals{
+    display:flex; gap:12px; flex-wrap:wrap; margin-top:8px;
+  }
+  .pill{
+    border:1px solid var(--line); background:#fff; border-radius:10px; padding:8px 10px; font-size:12px;
+  }
+  .pill.warn{ color:var(--warn); border-color:#f5d9c6; background:#fff8f3; font-weight:700; }
+  .footer{
+    margin-top:18px; padding-top:10px; border-top:1px solid var(--line); font-size:12px; color:var(--muted);
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .qr{
+    width:72px; height:72px; border:1px dashed var(--line); border-radius:8px; display:flex; align-items:center; justify-content:center; color:#9ca3af; font-size:10px;
+  }
+
+  @media print {
+    body { background:#fff; }
+    .page { box-shadow:none; padding:18mm 14mm; }
+    .no-print { display:none !important; }
+    a { color:inherit; text-decoration:none; }
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div style="display:flex; gap:12px; align-items:center;">
+        <div class="logo"></div>
+        <div class="school">
+          <h1>{{school_name}}</h1>
+          <div class="meta">{{school_address}} • {{school_phone}} • {{school_email}}</div>
+        </div>
+      </div>
+      <div>
+        <div class="doc-title">Fees Statement</div>
+        <div class="badge">Statement Date: {{statement_date}}</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3>Student</h3>
+        <div class="row"><div>Name</div><div><strong>{{student_name}}</strong></div></div>
+        <div class="row"><div>Admission No</div><div>{{admission_no}}</div></div>
+        <div class="row"><div>Class/Grade</div><div>{{class_name}}</div></div>
+        <div class="row"><div>Guardian</div><div>{{guardian_name}}</div></div>
+      </div>
+      <div class="card">
+        <h3>Statement Info</h3>
+        <div class="row"><div>Term</div><div>{{term_name}}</div></div>
+        <div class="row"><div>Currency</div><div>{{currency}}</div></div>
+        <div class="row"><div>Prepared By</div><div>{{prepared_by}}</div></div>
+        <div class="row"><div>Reference</div><div>{{statement_ref}}</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Fees Assessment</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Term</th>
+            <th>Due Date</th>
+            <th class="right">Amount ({{currency}})</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each assessment}}
+          <tr>
+            <td>{{this.item}}</td>
+            <td>{{this.term}}</td>
+            <td>{{this.due_date}}</td>
+            <td class="right">{{this.amount}}</td>
+          </tr>
+          {{/each}}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="3"><strong>Total Assessed</strong></td>
+            <td class="right"><strong>{{total_assessed}}</strong></td>
+          </tr>
+        </tfoot>
+      </table>
+
+      <div class="totals">
+        <div class="pill">Adjustments: {{currency}} {{total_adjustments}}</div>
+        <div class="pill">Total Paid: {{currency}} {{total_paid}}</div>
+        <div class="pill warn">Balance Due: {{currency}} {{balance_due}} (Due: {{balance_due_date}})</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h3>Payment History</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Method</th>
+            <th>Reference</th>
+            <th class="right">Amount ({{currency}})</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each payments}}
+          <tr>
+            <td>{{this.date}}</td>
+            <td>{{this.method}}</td>
+            <td>{{this.reference}}</td>
+            <td class="right">{{this.amount}}</td>
+          </tr>
+          {{/each}}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="3"><strong>Total Paid</strong></td>
+            <td class="right"><strong>{{total_paid}}</strong></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    <div class="footer">
+      <div>
+        Kindly clear the outstanding balance at the earliest. If payment was recently made, please disregard.
+        <div class="muted">Powered by EDU-TRACK • {{school_website}}</div>
+      </div>
+      <div class="qr">QR/Pay Ref</div>
+    </div>
+
+    <div class="no-print" style="margin-top:14px; text-align:right;">
+      <a href="{{pay_now_url}}" style="background:#165DFF; color:#fff; padding:10px 14px; border-radius:10px; font-weight:700;">Pay Now</a>
+    </div>
+  </div>
+</body>
+</html>

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import api from '../api'
 import AdminLayout from '../components/AdminLayout'
 import Modal from '../components/Modal'
+import { useNotification } from '../components/NotificationContext'
 
 const roles = ['admin','teacher','student','finance']
 
@@ -17,6 +18,8 @@ export default function AdminUsers(){
   const [edit, setEdit] = useState({ user_id:'', username:'', first_name:'', last_name:'', email:'', phone:'', role:'', new_password:'' })
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
+  const [savingEdit, setSavingEdit] = useState(false)
+  const { showSuccess, showError } = useNotification()
 
   const load = async () => {
     setLoading(true)
@@ -72,15 +75,24 @@ export default function AdminUsers(){
   const saveEdit = async (e) => {
     e.preventDefault()
     // Backend allows PATCH with: user_id, first_name, last_name, email, phone, username
-    const { user_id, username, first_name, last_name, email, phone, role, new_password } = edit
-    const payload = { user_id, username, first_name, last_name, email, phone }
-    if (role) payload.role = role
-    await api.patch('/auth/users/update/', payload)
-    if (new_password && new_password.trim().length > 0) {
-      await api.post('/auth/users/reset_password/', { user_id, new_password })
+    setSavingEdit(true)
+    try {
+      const { user_id, username, first_name, last_name, email, phone, role, new_password } = edit
+      const payload = { user_id, username, first_name, last_name, email, phone }
+      if (role) payload.role = role
+      await api.patch('/auth/users/update/', payload)
+      if (new_password && new_password.trim().length > 0) {
+        await api.post('/auth/users/reset_password/', { user_id, new_password })
+      }
+      setShowEdit(false)
+      showSuccess('User updated', 'Changes were saved successfully.')
+      load()
+    } catch (err) {
+      const msg = err?.response?.data?.detail || err?.message || 'Failed to save changes.'
+      showError('Update failed', msg)
+    } finally {
+      setSavingEdit(false)
     }
-    setShowEdit(false)
-    load()
   }
 
   const doReset = async (e) => {
@@ -214,7 +226,12 @@ export default function AdminUsers(){
           <input className="border p-2 rounded md:col-span-2" placeholder="New Password (optional)" type="password" value={edit.new_password} onChange={e=>setEdit({...edit, new_password:e.target.value})} />
           <div className="md:col-span-3 flex justify-end gap-2 mt-2">
             <button type="button" onClick={()=>setShowEdit(false)} className="px-4 py-2 rounded border">Cancel</button>
-            <button className="bg-indigo-600 text-white px-4 py-2 rounded">Save Changes</button>
+            <button disabled={savingEdit} className={`bg-indigo-600 text-white px-4 py-2 rounded flex items-center gap-2 ${savingEdit? 'opacity-60 cursor-not-allowed':''}`}>
+              {savingEdit && (
+                <span className="inline-block h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              )}
+              {savingEdit ? 'Saving...' : 'Save Changes'}
+            </button>
           </div>
         </form>
       </Modal>

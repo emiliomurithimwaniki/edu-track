@@ -22,6 +22,16 @@ export default function AdminClassProfile(){
   const [teachers, setTeachers] = useState([])
   const [showAssignModal, setShowAssignModal] = useState(false)
   const [assignForm, setAssignForm] = useState({ subject: '', teacher: '' })
+  const [showReassignCT, setShowReassignCT] = useState(false)
+  const [reassignTeacher, setReassignTeacher] = useState('')
+  const availableCTs = useMemo(() => {
+    const cid = String(id)
+    return (teachers || []).filter(t => {
+      const tk = t?.klass
+      // allow if unassigned OR already assigned to this class
+      return tk === null || tk === '' || typeof tk === 'undefined' || String(tk) === cid
+    })
+  }, [teachers, id])
 
   useEffect(() => {
     let cancelled = false
@@ -241,7 +251,10 @@ export default function AdminClassProfile(){
                       </div>
                       <div className="p-3 rounded border bg-gray-50">
                         <div className="text-xs text-gray-500">Class Teacher</div>
-                        <div className="font-medium">{klass?.teacher_detail ? `${klass.teacher_detail.first_name} ${klass.teacher_detail.last_name}` : '—'}</div>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="font-medium truncate">{klass?.teacher_detail ? `${klass.teacher_detail.first_name} ${klass.teacher_detail.last_name}` : '—'}</div>
+                          <button onClick={()=>{ setReassignTeacher(String(klass?.teacher_detail?.id||'')); setShowReassignCT(true) }} className="text-xs px-2 py-1 rounded border hover:bg-white">Reassign</button>
+                        </div>
                       </div>
                     </div>
 
@@ -454,6 +467,35 @@ export default function AdminClassProfile(){
           <div className="flex justify-end gap-2 mt-2">
             <button type="button" onClick={()=>setShowAssignModal(false)} className="px-4 py-2 rounded border">Cancel</button>
             <button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">Save</button>
+          </div>
+        </form>
+      </Modal>
+      {/* Reassign Class Teacher Modal */}
+      <Modal open={showReassignCT} onClose={()=>setShowReassignCT(false)} title="Reassign Class Teacher" size="sm">
+        <form onSubmit={async (e)=>{
+          e.preventDefault()
+          try{
+            const payload = { teacher: reassignTeacher ? Number(reassignTeacher) : null }
+            await api.patch(`/academics/classes/${id}/`, payload)
+            const { data } = await api.get(`/academics/classes/${id}/`)
+            setKlass(data)
+            setShowReassignCT(false)
+          }catch(err){ setShowReassignCT(false) }
+        }} className="grid gap-3">
+          <label className="grid gap-1">
+            <span className="text-sm text-gray-700">Select Teacher</span>
+            <select className="border p-2 rounded" value={reassignTeacher} onChange={e=>setReassignTeacher(e.target.value)} required>
+              <option value="">Choose a teacher</option>
+              {availableCTs.map(t=> (
+                <option key={t.user?.id || t.id} value={t.user?.id || t.id}>
+                  {(t.user?.first_name||'') + ' ' + (t.user?.last_name||'') + (t.user?.username ? ` (@${t.user.username})` : '')}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex justify-end gap-2 mt-2">
+            <button type="button" onClick={()=>setShowReassignCT(false)} className="px-4 py-2 rounded border">Cancel</button>
+            <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded">Save</button>
           </div>
         </form>
       </Modal>

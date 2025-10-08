@@ -3,7 +3,8 @@ from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
 
-load_dotenv()
+# Ensure .env takes precedence over any pre-set OS environment variables
+load_dotenv(override=True)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -189,3 +190,10 @@ AT_USERNAME = os.getenv('AT_USERNAME', 'sandbox')
 AT_API_KEY = os.getenv('AT_API_KEY', '')
 # Optional sender id or short code (leave empty for sandbox default)
 AT_SENDER_ID = os.getenv('AT_SENDER_ID', '')
+# When on sandbox, we typically use REST to avoid SDK WhatsApp sandbox issues.
+AT_USE_REST_FOR_SANDBOX = os.getenv('AT_USE_REST_FOR_SANDBOX', 'True') == 'True'
+# Optional: simulate SMS success in development when delivery fails (for demos/tests)
+SMS_LOOPBACK = os.getenv('SMS_LOOPBACK', 'False') == 'True'
+
+# Control whether creating chat messages queues email/SMS delivery
+MESSAGES_QUEUE_DELIVERY = os.getenv('MESSAGES_QUEUE_DELIVERY', 'True') == 'True'

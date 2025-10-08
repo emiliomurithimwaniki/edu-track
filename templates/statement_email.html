@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>School Fees Statement</title>
+  <style>
+    body { margin:0; padding:0; background:#f6f8fb; }
+    table { border-collapse:collapse; }
+    img { border:0; outline:none; text-decoration:none; }
+    a { text-decoration:none; }
+
+    .wrapper { width:100%; background:#f6f8fb; padding:24px 0; }
+    .container { width:100%; max-width:680px; margin:0 auto; background:#ffffff; border-radius:14px; overflow:hidden; box-shadow:0 10px 28px rgba(16,24,40,0.08); }
+
+    .header { background:linear-gradient(135deg,#165DFF,#3CC9FF); color:#ffffff; padding:24px; }
+    .brand { display:flex; align-items:center; gap:12px; }
+    .brand .logo { width:40px; height:40px; background:#ffffff; border-radius:10px; display:inline-block; }
+    .brand h1 { font-family:Arial, sans-serif; font-size:18px; margin:0; font-weight:700; letter-spacing:.2px; }
+
+    .content { padding:24px; font-family:Arial, sans-serif; color:#1f2937; }
+    .title { font-size:20px; font-weight:700; margin:0 0 8px; color:#0f172a; }
+    .muted { color:#6b7280; font-size:13px; line-height:1.5; margin:0 0 16px; }
+
+    .cards { width:100%; }
+    .card { width:100%; border:1px solid #eef2f7; border-radius:12px; padding:16px; margin-bottom:16px; }
+    .card h3 { margin:0 0 8px; font-size:14px; color:#0f172a; text-transform:uppercase; letter-spacing:.5px; }
+    .grid-2 { width:100%; }
+    .grid-2 td { vertical-align:top; width:50%; padding-right:12px; font-size:13px; color:#111827; }
+    .grid-2 td:last-child { padding-right:0; }
+    .small { color:#6b7280; font-size:12px; }
+
+    .table { width:100%; border:1px solid #eef2f7; border-radius:12px; overflow:hidden; margin:16px 0; }
+    .table thead th { background:#f8fafc; color:#0f172a; font-weight:700; font-size:12px; text-align:left; padding:12px; border-bottom:1px solid #eef2f7; }
+    .table tbody td { font-size:13px; padding:12px; border-bottom:1px solid #f1f5f9; color:#111827; }
+    .table tfoot td { font-size:13px; padding:12px; background:#fcfdff; }
+    .right { text-align:right; }
+
+    .summary { display:flex; gap:8px; flex-wrap:wrap; margin:8px 0 0; }
+    .pill { background:#f1f5ff; color:#1d4ed8; border:1px solid #e4ecff; padding:8px 10px; border-radius:999px; font-size:12px; }
+    .warn { background:#fff4f0; color:#b45309; border:1px solid #ffe1d6; }
+    .ok { background:#ecfdf5; color:#047857; border:1px solid #d1fae5; }
+
+    .cta-wrap { text-align:center; margin-top:20px; }
+    .cta { display:inline-block; background:#165DFF; color:#ffffff; padding:12px 18px; border-radius:10px; font-weight:700; font-size:14px; }
+    .cta:hover { background:#0e49c9; }
+
+    .footer { padding:18px 24px 26px; text-align:center; color:#6b7280; font-size:12px; }
+    .divider { height:1px; width:100%; background:#eef2f7; margin:8px 0 16px; }
+
+    @media (max-width: 600px) {
+      .grid-2 td { display:block; width:100% !important; padding-right:0 !important; padding-bottom:8px; }
+      .grid-2 tr td:last-child { padding-bottom:0; }
+    }
+  </style>
+</head>
+<body>
+  <table class="wrapper" role="presentation" width="100%" cellpadding="0" cellspacing="0">
+    <tr>
+      <td align="center">
+        <table class="container" role="presentation" cellpadding="0" cellspacing="0" width="100%">
+          <tr>
+            <td class="header">
+              <div class="brand">
+                <span class="logo"></span>
+                <h1>{{school_name}}</h1>
+              </div>
+              <div class="small" style="margin-top:6px;">{{school_address}} • {{school_phone}} • {{school_email}}</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="content">
+              <h2 class="title">Fees Statement</h2>
+              <p class="muted">Dear {{guardian_name}}, below is a complete statement for <strong>{{student_name}}</strong> ({{class_name}}). It includes fee assessment and payment history.</p>
+
+              <table class="cards" role="presentation" width="100%">
+                <tr>
+                  <td>
+                    <div class="card">
+                      <h3>Student</h3>
+                      <table class="grid-2" role="presentation">
+                        <tr>
+                          <td>
+                            <div><strong>Name:</strong> {{student_name}}</div>
+                            <div><strong>Admission No:</strong> {{admission_no}}</div>
+                            <div><strong>Class/Grade:</strong> {{class_name}}</div>
+                          </td>
+                          <td>
+                            <div><strong>Term:</strong> {{term_name}}</div>
+                            <div><strong>Statement Date:</strong> {{statement_date}}</div>
+                            <div><strong>Currency:</strong> {{currency}}</div>
+                          </td>
+                        </tr>
+                      </table>
+                      <div class="summary">
+                        <span class="pill">Assessed: {{currency}} {{total_assessed}}</span>
+                        <span class="pill ok">Paid: {{currency}} {{total_paid}}</span>
+                        <span class="pill">Adjustments: {{currency}} {{total_adjustments}}</span>
+                        <span class="pill warn"><strong>Balance: {{currency}} {{balance_due}}</strong></span>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <div style="margin-top:8px;">
+                <h3 style="font-family:Arial, sans-serif; font-size:14px; color:#0f172a; text-transform:uppercase; letter-spacing:.5px; margin:0 0 8px;">Fees Assessment</h3>
+                <table class="table" cellpadding="0" cellspacing="0" role="presentation">
+                  <thead>
+                    <tr>
+                      <th>Item</th>
+                      <th>Term</th>
+                      <th>Due Date</th>
+                      <th class="right">Amount ({{currency}})</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {{#each assessment}}
+                    <tr>
+                      <td>{{this.item}}</td>
+                      <td>{{this.term}}</td>
+                      <td>{{this.due_date}}</td>
+                      <td class="right">{{this.amount}}</td>
+                    </tr>
+                    {{/each}}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colspan="3"><strong>Total Assessed</strong></td>
+                      <td class="right"><strong>{{total_assessed}}</strong></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              <div style="margin-top:16px;">
+                <h3 style="font-family:Arial, sans-serif; font-size:14px; color:#0f172a; text-transform:uppercase; letter-spacing:.5px; margin:0 0 8px;">Payment History</h3>
+                <table class="table" cellpadding="0" cellspacing="0" role="presentation">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Method</th>
+                      <th>Reference</th>
+                      <th class="right">Amount ({{currency}})</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {{#each payments}}
+                    <tr>
+                      <td>{{this.date}}</td>
+                      <td>{{this.method}}</td>
+                      <td>{{this.reference}}</td>
+                      <td class="right">{{this.amount}}</td>
+                    </tr>
+                    {{/each}}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colspan="3"><strong>Total Paid</strong></td>
+                      <td class="right"><strong>{{total_paid}}</strong></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+
+              <div class="card" style="margin-top:16px;">
+                <table role="presentation" width="100%">
+                  <tr>
+                    <td>
+                      <div style="font-size:13px; color:#0f172a;">
+                        <div><strong>Assessed:</strong> {{currency}} {{total_assessed}}</div>
+                        <div><strong>Paid:</strong> {{currency}} {{total_paid}}</div>
+                        <div><strong>Adjustments:</strong> {{currency}} {{total_adjustments}}</div>
+                      </div>
+                    </td>
+                    <td class="right">
+                      <div style="font-size:16px; font-weight:800; color:#b45309;">Balance Due: {{currency}} {{balance_due}}</div>
+                      <div class="small">Due by {{balance_due_date}}</div>
+                    </td>
+                  </tr>
+                </table>
+                <div class="cta-wrap">
+                  <a href="{{pay_now_url}}" class="cta">Pay Now</a>
+                </div>
+              </div>
+
+              <div class="divider"></div>
+              <p class="muted">If you have already cleared the balance, please ignore this message. For assistance, reply to this email or contact the bursar’s office.</p>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="footer">
+              © {{year}} {{school_name}} • {{school_website}}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

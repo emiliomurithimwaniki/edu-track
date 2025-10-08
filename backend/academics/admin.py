@@ -1,11 +1,17 @@
 from django.contrib import admin
-from .models import Subject, Class, TeacherProfile, Student, Competency, Assessment, Attendance, AcademicYear, Term, Room, TimetableEntry
+from .models import Subject, SubjectComponent, Class, TeacherProfile, Student, Competency, Assessment, Attendance, AcademicYear, Term, Room, TimetableEntry, Exam, ExamResult
 
 @admin.register(Subject)
 class SubjectAdmin(admin.ModelAdmin):
     list_display = ("id", "code", "name", "school")
     search_fields = ("code", "name")
     list_filter = ("school",)
+
+@admin.register(SubjectComponent)
+class SubjectComponentAdmin(admin.ModelAdmin):
+    list_display = ("id", "subject", "code", "name", "max_marks", "weight", "order")
+    list_filter = ("subject__school", "subject")
+    search_fields = ("code", "name", "subject__code", "subject__name")
 
 @admin.register(Class)
 class ClassAdmin(admin.ModelAdmin):
@@ -69,3 +75,16 @@ class TimetableEntryAdmin(admin.ModelAdmin):
     list_display = ("id", "term", "day_of_week", "start_time", "end_time", "klass", "subject", "teacher", "room")
     list_filter = ("term", "day_of_week", "klass__school", "klass", "subject", "teacher", "room")
     search_fields = ("klass__name", "subject__code", "subject__name", "teacher__username", "room__name")
+
+
+@admin.register(Exam)
+class ExamAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "year", "term", "klass", "date", "total_marks", "published")
+    list_filter = ("year", "term", "klass__school", "klass", "published")
+    search_fields = ("name", "klass__name")
+
+@admin.register(ExamResult)
+class ExamResultAdmin(admin.ModelAdmin):
+    list_display = ("id", "exam", "student", "subject", "component", "marks")
+    list_filter = ("exam", "subject", "component", "exam__klass__school")
+    search_fields = ("student__name", "subject__code", "subject__name", "exam__name")

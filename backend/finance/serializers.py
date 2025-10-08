@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Invoice, Payment, FeeCategory, ClassFee, MpesaConfig
+from .models import Invoice, Payment, FeeCategory, ClassFee, MpesaConfig, ExpenseCategory, Expense, PocketMoneyWallet, PocketMoneyTransaction
 
 class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -28,18 +28,35 @@ class InvoiceSerializer(serializers.ModelSerializer):
     payments = PaymentSerializer(many=True, read_only=True)
     category_detail = FeeCategorySerializer(source='category', read_only=True)
     class Meta:
-        model = Invoice
         fields = ['id','student','amount','status','category','category_detail','year','term','mpesa_transaction_id','due_date','created_at','payments']
 
 class MpesaConfigSerializer(serializers.ModelSerializer):
     class Meta:
         model = MpesaConfig
-        fields = [
-            'id', 'school', 'consumer_key', 'consumer_secret', 'short_code',
-            'passkey', 'callback_url', 'environment', 'created_at', 'updated_at'
-        ]
-        read_only_fields = ['school', 'created_at', 'updated_at']
-        extra_kwargs = {
-            'consumer_secret': {'write_only': True},
-            'passkey': {'write_only': True},
-        }
+        fields = '__all__'
+
+
+class ExpenseCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ExpenseCategory
+        fields = '__all__'
+
+
+class ExpenseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Expense
+        fields = '__all__'
+
+
+class PocketMoneyTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PocketMoneyTransaction
+        fields = '__all__'
+
+
+class PocketMoneyWalletSerializer(serializers.ModelSerializer):
+    transactions = PocketMoneyTransactionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PocketMoneyWallet
+        fields = '__all__'

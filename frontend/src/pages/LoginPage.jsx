@@ -137,8 +137,8 @@ export default function LoginPage() {
       {/* Dark vignette overlay */}
       <div className="absolute inset-0 bg-black/40" />
 
-      {/* Top navigation to match mockup */}
-      <header className="relative z-10 flex items-center justify-between px-6 md:px-10 py-5 text-white">
+      {/* Top navigation to match mockup (hidden on mobile, we'll have a simpler header there) */}
+      <header className="hidden sm:flex relative z-10 items-center justify-between px-6 md:px-10 py-5 text-white">
         <div className="flex items-center gap-3">
           {/* Logo placeholder */}
           <div className="w-10 h-10 rounded-md border border-white/70" />
@@ -148,8 +148,17 @@ export default function LoginPage() {
         <a href="#" className="text-sm">Contact Us</a>
       </header>
 
-      {/* Panels */}
-      <main className="relative z-10 h-[calc(100vh-80px)] md:h-[calc(100vh-96px)]">
+      {/* Mobile header */}
+      <div className="sm:hidden relative z-10 flex items-center justify-between px-4 py-4 text-white">
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 rounded-md border border-white/70" />
+          <div className="text-xs font-semibold tracking-wider">EDU-TRACK</div>
+        </div>
+        <a href="#" className="text-xs underline">Contact</a>
+      </div>
+
+      {/* Desktop/Tablet Panels */}
+      <main className="hidden sm:block relative z-10 h-[calc(100vh-80px)] md:h-[calc(100vh-96px)]">
         {/* Role Selection Panel - left */}
         {formStep === 'role' && (
           <div className="absolute left-[-100px] md:left-[-70px] top-1/2 -translate-y-1/2">
@@ -343,6 +352,85 @@ export default function LoginPage() {
           </div>
         )}
       </main>
+
+      {/* Mobile-only content */}
+      <div className="sm:hidden relative z-10 px-4 pb-10">
+        <div className="max-w-md mx-auto">
+          {/* Brand */}
+          <div className="text-center text-white mb-5">
+            <div className="font-extrabold tracking-widest">WELCOME</div>
+            <div className="text-xs text-white/80">Sign in to continue</div>
+          </div>
+
+          {/* Card */}
+          <div className="bg-white/90 backdrop-blur rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.25)] ring-1 ring-white/60 p-4">
+            {formStep === 'role' && (
+              <div>
+                <h2 className="text-lg font-bold text-red-700 mb-3">Select Your Role</h2>
+                <div className="grid grid-cols-2 gap-2">
+                  {roles.map(r => (
+                    <button
+                      key={r.key}
+                      onClick={()=>handleRoleSelect(r.key)}
+                      className={`py-2.5 rounded-lg text-sm font-medium border transition ${role===r.key ? 'bg-neutral-200 border-neutral-300' : 'bg-white border-neutral-200 hover:bg-neutral-100'}`}
+                    >{r.label}</button>
+                  ))}
+                </div>
+                <button
+                  onClick={()=>{ if(!role) return; setFormStep('credentials') }}
+                  disabled={!role}
+                  className="mt-4 w-full py-3 rounded-full bg-red-700 text-white font-semibold disabled:opacity-60"
+                >Proceed</button>
+                <div className="mt-2 text-[12px] text-gray-600 text-center">Need help choosing? Contact the school admin.</div>
+              </div>
+            )}
+
+            {formStep === 'credentials' && (
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h2 className="text-lg font-bold text-red-700">Log In</h2>
+                  <button onClick={handleBackToRole} className="text-xs text-red-700 underline">Change role</button>
+                </div>
+                {role && (
+                  <div className="mb-3 text-xs">
+                    Signing in as: <span className="px-2 py-0.5 rounded-full bg-red-50 text-red-700 border border-red-200">{role}</span>
+                  </div>
+                )}
+                {error && <div className="mb-3 text-xs text-red-700 bg-red-100 border border-red-200 rounded px-2 py-1.5">{error}</div>}
+                <form onSubmit={submit} className="space-y-3">
+                  <div>
+                    <label className="block text-[12px] text-gray-700 mb-1">Username</label>
+                    <input
+                      type="text"
+                      value={username}
+                      onChange={e=>setUsername(e.target.value)}
+                      className="w-full rounded-lg border border-black/10 bg-white/80 px-3 py-2 text-sm"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[12px] text-gray-700 mb-1">Password</label>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? 'text' : 'password'}
+                        value={password}
+                        onChange={e=>setPassword(e.target.value)}
+                        className="w-full rounded-lg border border-black/10 bg-white/80 px-3 py-2 text-sm pr-16"
+                        required
+                      />
+                      <button type="button" onClick={()=>setShowPassword(v=>!v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-600">{showPassword?'Hide':'Show'}</button>
+                    </div>
+                  </div>
+                  <button type="submit" disabled={isLoading} className="w-full rounded-full bg-red-700 text-white font-semibold py-2.5 disabled:opacity-60">{isLoading?'Signing In…':'Proceed'}</button>
+                </form>
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="mt-4 text-center text-[11px] text-white/80">© {new Date().getFullYear()} EDU-TRACK</div>
+        </div>
+      </div>
     </div>
   )
 }

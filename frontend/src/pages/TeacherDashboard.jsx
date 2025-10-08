@@ -10,6 +10,13 @@ export default function TeacherDashboard(){
   const [events, setEvents] = useState([])
   const [viewMonth, setViewMonth] = useState(new Date())
   const [me, setMe] = useState(null)
+  const [plan, setPlan] = useState(null)
+  const [template, setTemplate] = useState(null)
+  const [periods, setPeriods] = useState([])
+  const [blockAssignments, setBlockAssignments] = useState({})
+  const [nextClass, setNextClass] = useState(null) // {label, start: Date}
+  const [countdown, setCountdown] = useState('')
+  const [todayPlanCount, setTodayPlanCount] = useState(0)
 
   useEffect(()=>{
     let mounted = true
@@ -57,6 +64,28 @@ export default function TeacherDashboard(){
         if (sch?.data) setSchool(sch.data)
         if (ev?.data) setEvents(ev.data)
         if (meRes?.data) setMe(meRes.data)
+
+        // Load minimal timetable data to derive next class
+        try{
+          const plans = await api.get('/academics/timetable/plans/').then(r=> Array.isArray(r.data)? r.data : (r.data?.results||[])).catch(()=>[])
+          const p = plans?.[0] || null
+          setPlan(p)
+          if (p?.id){
+            try{ const r = await api.get(`/academics/timetable/plans/${p.id}/`); const ba = r.data?.block_assignments||{}; if (ba && typeof ba==='object') setBlockAssignments(ba) }catch{}
+            const tId = p.template || (await api.get(`/academics/timetable/plans/${p.id}/`).then(r=>r.data?.template).catch(()=>null))
+            if (tId){
+              try{ const tRes = await api.get(`/academics/timetable/templates/${tId}/`); setTemplate(tRes.data) }catch{}
+              try{ const pr = await api.get(`/academics/timetable/periods/?template=${tId}`); const list = Array.isArray(pr.data)? pr.data : (pr.data?.results||[]); setPeriods(list.sort((a,b)=> (a.period_index||0)-(b.period_index||0))) }catch{}
+            }
+          }
+        }catch{}
+
+        // Today's lesson plans count (teacher-scope via viewset)
+        try{
+          const today = new Date().toISOString().slice(0,10)
+          const lp = await api.get(`/academics/lesson_plans/?date=${today}`).then(r=> Array.isArray(r.data)? r.data : (r.data?.results||[])).catch(()=>[])
+          setTodayPlanCount(lp.length || 0)
+        }catch{ setTodayPlanCount(0) }
       }catch(e){
         if (!mounted) return
         setError(e?.response?.data?.detail || e?.message || 'Failed to load classes')
@@ -67,12 +96,77 @@ export default function TeacherDashboard(){
     return ()=>{ mounted = false }
   },[])
 
+  // Derive next class for TODAY using template periods and block assignments
+  useEffect(()=>{
+    if (!me || !plan || !template || !periods?.length || !classes?.length) { setNextClass(null); return }
+    const meId = String(me?.id||'')
+    const now = new Date()
+    const dow = ((now.getDay()+6)%7)+1 // convert JS Sun=0..Sat=6 -> Mon=1..Sun=7
+    const todayPeriods = (periods||[]).filter(p=> (p.kind||'lesson')==='lesson').sort((a,b)=> (a.period_index||0)-(b.period_index||0))
+    let best = null
+    for (const c of (classes||[])){
+      // quick helper: does current teacher teach subject s.id in class c?
+      const teaches = (subjId)=>{
+        const sts = Array.isArray(c.subject_teachers)? c.subject_teachers : []
+        for (const st of sts){
+          const sid = st.subject || st.subject_id || st.subject_detail?.id
+          const tid = st.teacher || st.teacher_id || st.teacher_detail?.id || st.teacher_detail?.user?.id
+          if (String(sid)===String(subjId) && String(tid)===meId) return true
+        }
+        // If class teacher and no mapping, allow all subjects of the class
+        const isCT = [c?.teacher, c?.teacher_detail?.id, c?.teacher_detail?.user?.id].map(v=> (v==null?'':String(v))).includes(meId)
+        return isCT
+      }
+      for (const p of todayPeriods){
+        const key = `${dow}-${c.id}-${p.period_index}`
+        const assign = (blockAssignments||{})[key]
+        // If there is no assignment for this slot, skip unless teacher is class teacher (fallback placeholder)
+        if (!assign){
+          // Fallback: if teacher is CT of this class, propose generic lesson slot
+          const isCT = [c?.teacher, c?.teacher_detail?.id, c?.teacher_detail?.user?.id].map(v=> (v==null?'':String(v))).includes(meId)
+          if (!isCT) continue
+        }
+        const subjId = assign ? (assign.subjectId ?? assign.subject_id ?? assign.subject ?? assign.subjectID) : null
+        if (assign && !teaches(subjId)) continue
+        // Build Date for period start today
+        const timeParts = String(p.start_time||'08:00:00').split(':')
+        const hh = parseInt(timeParts[0]||'8',10)||8
+        const mm = parseInt(timeParts[1]||'0',10)||0
+        const ss = parseInt(timeParts[2]||'0',10)||0
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hh, mm, ss||0)
+        if (start > now){
+          const subjectLabel = assign ? (assign.subjectCode || assign.subject_name || assign.subject || `Lesson ${p.period_index}`) : `Lesson ${p.period_index}`
+          if (!best || start < best.start) best = { label: `${c.name} — ${subjectLabel}`.trim(), start }
+        }
+      }
+    }
+    setNextClass(best)
+  }, [me, plan, template, periods, blockAssignments, classes])
+
+  // Live countdown updater (1s for accuracy)
+  useEffect(()=>{
+    if (!nextClass?.start){ setCountdown(''); return }
+    const tick = ()=>{
+      const now = new Date()
+      const diff = Math.max(0, nextClass.start - now)
+      const mins = Math.floor(diff/60000)
+      const secs = Math.floor((diff%60000)/1000)
+      const hrs = Math.floor(mins/60)
+      const remMin = mins%60
+      const label = hrs>0 ? `${hrs}h ${remMin}m` : `${remMin}m ${secs.toString().padStart(2,'0')}s`
+      setCountdown(label)
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return ()=> clearInterval(id)
+  }, [nextClass?.start])
+
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
       {/* Header - elevated gradient card */}
-      <div className="relative overflow-hidden rounded-2xl border border-gray-200 bg-white shadow">
+      <div className="relative overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
         <div className="pointer-events-none absolute -top-10 right-0 h-40 w-40 rounded-full bg-indigo-500/10 blur-2" />
-        <div className="p-5 md:p-6 flex items-center justify-between gap-4">
+        <div className="p-4 md:p-6 flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             {school?.logo_url ? (
               <img src={school.logo_url} alt="School logo" className="h-12 w-12 rounded-lg bg-gray-50 p-1 object-contain border border-gray-200" />
@@ -80,23 +174,39 @@ export default function TeacherDashboard(){
               <div className="h-12 w-12 rounded-lg bg-indigo-50 flex items-center justify-center text-xl border border-indigo-100">🏫</div>
             )}
             <div>
-              <div className="text-xl md:text-2xl font-bold tracking-tight">Teacher Dashboard</div>
-              <div className="text-gray-600 text-sm truncate flex items-center gap-2">
+              <div className="text-lg md:text-2xl font-bold tracking-tight">Teacher Dashboard</div>
+              <div className="text-gray-600 text-xs md:text-sm truncate flex items-center gap-2">
                 <span>{school?.name || '—'}</span>
                 {school?.term && <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">{school.term}</span>}
               </div>
             </div>
           </div>
-          <div className="text-xs md:text-sm text-gray-600">Quick actions and classes</div>
+          <div className="hidden sm:block text-xs md:text-sm text-gray-600">Quick actions and classes</div>
         </div>
       </div>
 
       {/* Summary cards */}
-      <div className="grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-2 md:grid-cols-4 items-stretch">
+      {/* Mobile: horizontal snap scroller */}
+      <div className="sm:hidden -mx-2 px-2">
+        <div className="flex gap-3 overflow-x-auto snap-x snap-mandatory pb-1 no-scrollbar">
+          <DashCard title="Classes" value={classes.length} icon="📚" to="/teacher/classes" accent="from-indigo-500 to-indigo-600"/>
+          <DashCard title="Attendance" value="Mark" icon="🗓️" to="/teacher/attendance" accent="from-emerald-500 to-emerald-600"/>
+          <DashCard title="Lesson Plans" value="Create" icon="🧭" to="/teacher/lessons" accent="from-fuchsia-500 to-pink-600"/>
+          <DashCard title="Grades" value="Input" icon="📝" to="/teacher/grades" accent="from-amber-500 to-orange-600"/>
+        </div>
+      </div>
+      {/* Desktop/tablet: grid */}
+      <div className="hidden sm:grid gap-3 sm:gap-4 grid-cols-2 md:grid-cols-4 items-stretch">
         <DashCard title="Classes" value={classes.length} icon="📚" to="/teacher/classes" accent="from-indigo-500 to-indigo-600"/>
         <DashCard title="Attendance" value="Mark" icon="🗓️" to="/teacher/attendance" accent="from-emerald-500 to-emerald-600"/>
         <DashCard title="Lesson Plans" value="Create" icon="🧭" to="/teacher/lessons" accent="from-fuchsia-500 to-pink-600"/>
         <DashCard title="Grades" value="Input" icon="📝" to="/teacher/grades" accent="from-amber-500 to-orange-600"/>
+      </div>
+
+      {/* Next class + Today's tasks */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <NextClassCard nextClass={nextClass} countdown={countdown} />
+        <TodayTasksCard classes={classes} me={me} plansCount={todayPlanCount} />
       </div>
 
       {/* Main content: Calendar left, Quick panels right on large screens */}
@@ -125,9 +235,9 @@ export default function TeacherDashboard(){
         {(!classes || classes.length===0) ? (
           <EmptyState icon="📦" title="No classes yet" subtitle="Once classes are assigned, they will show up here." action={<Link to="/teacher/classes" className="text-sm px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700">Browse Classes</Link>} />
         ) : (
-          <ul className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
+          <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
             {classes.map(c => (
-              <li key={c.id} className="group border border-gray-200 rounded-xl p-3 sm:p-4 bg-white hover:shadow-sm transition-all">
+              <li key={c.id} className="group border border-gray-200 rounded-2xl p-3 sm:p-4 bg-white hover:shadow-sm transition-all">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="font-medium truncate">{c.name}</div>
@@ -146,9 +256,9 @@ export default function TeacherDashboard(){
                     )}
                   </div>
                 )}
-                <div className="mt-3 flex flex-wrap gap-2 text-sm">
-                  <Link to={`/teacher/classes?class=${c.id}`} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50">Open<span>→</span></Link>
-                  <Link to={`/teacher/attendance?class=${c.id}`} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50">Attendance</Link>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <Link to={`/teacher/classes?class=${c.id}`} className="inline-flex items-center justify-center gap-1 px-2.5 py-2 rounded-lg border border-gray-200 hover:bg-gray-50">Open<span>→</span></Link>
+                  <Link to={`/teacher/attendance?class=${c.id}`} className="inline-flex items-center justify-center gap-1 px-2.5 py-2 rounded-lg border border-gray-200 hover:bg-gray-50">Attendance</Link>
                 </div>
               </li>
             ))}
@@ -164,7 +274,7 @@ export default function TeacherDashboard(){
 
 function DashCard({ title, value, to, icon, accent }){
   return (
-    <Link to={to} className="group rounded-2xl border border-gray-200 bg-white p-3 sm:p-4 flex items-center justify-between shadow-sm hover:shadow transition-all">
+    <Link to={to} className="group rounded-2xl border border-gray-200 bg-white p-3 sm:p-4 flex items-center justify-between shadow-sm hover:shadow transition-all snap-center min-w-[260px]">
       <div className="flex items-center gap-3">
         <IconBox accent={accent}>{icon || '➡️'}</IconBox>
         <div>
@@ -209,6 +319,63 @@ function Chip({ children }){
 function IconBox({ children, accent = 'from-indigo-500 to-indigo-600' }){
   return (
     <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-lg text-white flex items-center justify-center text-xl bg-gradient-to-br ${accent}`}>{children}</div>
+  )
+}
+
+/* Next Class + Today Tasks */
+function NextClassCard({ nextClass, countdown }){
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between mb-1">
+        <div className="font-medium text-gray-900">My Next Class</div>
+        <span className="text-xs text-gray-500">Today</span>
+      </div>
+      {!nextClass ? (
+        <div className="text-sm text-gray-600">No upcoming class today.</div>
+      ) : (
+        <div className="flex items-center gap-3">
+          <IconBox accent="from-sky-500 to-blue-600">📘</IconBox>
+          <div className="min-w-0">
+            <div className="font-semibold truncate">{nextClass.label}</div>
+            <div className="text-xs text-gray-600">Starts {nextClass.start?.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>
+            <div className="text-xs text-emerald-700 mt-0.5">{countdown}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TodayTasksCard({ classes=[], me, plansCount=0 }){
+  // Find class teacher class (first)
+  const meId = String(me?.id || '')
+  const myClass = (classes||[]).find(c => [c?.teacher, c?.teacher_detail?.id, c?.teacher_detail?.user?.id].map(v=> (v==null? '' : String(v))).includes(meId))
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="font-medium text-gray-900 mb-2">Today's Tasks</div>
+      <ul className="grid gap-2">
+        <li className="flex items-center justify-between p-2 rounded-lg border border-gray-100">
+          <div className="flex items-center gap-2 min-w-0">
+            <IconBox accent="from-emerald-500 to-green-600">✅</IconBox>
+            <div className="min-w-0">
+              <div className="text-sm font-medium truncate">Lesson Plans</div>
+              <div className="text-xs text-gray-600">{plansCount} plan(s) today</div>
+            </div>
+          </div>
+          <Link to="/teacher/lessons" className="text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50">Open</Link>
+        </li>
+        <li className="flex items-center justify-between p-2 rounded-lg border border-gray-100">
+          <div className="flex items-center gap-2 min-w-0">
+            <IconBox accent="from-amber-500 to-orange-600">🗓️</IconBox>
+            <div className="min-w-0">
+              <div className="text-sm font-medium truncate">Attendance {myClass? `— ${myClass.name}`:''}</div>
+              <div className="text-xs text-gray-600">Mark attendance for today</div>
+            </div>
+          </div>
+          <Link to="/teacher/attendance" className="text-sm px-2.5 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50">Mark</Link>
+        </li>
+      </ul>
+    </div>
   )
 }
 
@@ -261,6 +428,33 @@ function getSubjectNames(c){
   }
   // dedupe
   return Array.from(new Set(out))
+}
+
+// Derive subject names that the current teacher teaches in a given class, with graceful fallbacks
+function getMySubjectNames(c, me){
+  if (!c) return []
+  const meId = String(me?.id || '')
+  const subjectsArr = Array.isArray(c.subjects) ? c.subjects : []
+  // If there is a mapping of subject_teachers, restrict to those where teacher matches me
+  if (Array.isArray(c.subject_teachers) && c.subject_teachers.length && meId){
+    const allowedIds = new Set(
+      c.subject_teachers
+        .filter(st => String(st?.teacher || st?.teacher_detail?.id || '') === meId)
+        .map(st => String(st?.subject || st?.subject_id || st?.subject_detail?.id || ''))
+        .filter(Boolean)
+    )
+    const mine = subjectsArr.filter(s => allowedIds.has(String(s?.id)))
+    if (mine.length){
+      return mine.map(s => s?.code || s?.name || s?.title).filter(Boolean)
+    }
+  }
+  // If teacher is class teacher and no mapping available, show all subjects
+  if (meId && String(c?.teacher) === meId){
+    return subjectsArr.map(s => s?.code || s?.name || s?.title).filter(Boolean)
+  }
+  // Fallbacks: try any subject name fields available on the class
+  const any = getSubjectNames(c)
+  return any
 }
 
 /* Mini Calendar copied/adapted from AdminDashboard */

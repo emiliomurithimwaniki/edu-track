@@ -3,6 +3,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import Sum
+from django.db.models.functions import TruncMonth
+from datetime import datetime, timedelta
+from django.utils import timezone
 from rest_framework.parsers import MultiPartParser, JSONParser, FormParser
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -10,8 +13,8 @@ import json
 import os
 import logging
 from .mpesa import MpesaClient
-from .models import Invoice, Payment, FeeCategory, ClassFee, MpesaConfig
-from .serializers import InvoiceSerializer, PaymentSerializer, FeeCategorySerializer, ClassFeeSerializer, MpesaConfigSerializer
+from .models import Invoice, Payment, FeeCategory, ClassFee, MpesaConfig, ExpenseCategory, Expense, PocketMoneyWallet, PocketMoneyTransaction
+from .serializers import InvoiceSerializer, PaymentSerializer, FeeCategorySerializer, ClassFeeSerializer, MpesaConfigSerializer, ExpenseCategorySerializer, ExpenseSerializer, PocketMoneyWalletSerializer, PocketMoneyTransactionSerializer
 from academics.models import Student
 
 class IsFinanceOrAdmin(permissions.BasePermission):
@@ -142,6 +145,107 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         data.sort(key=lambda x: x['balance'], reverse=True)
         return Response(data)
 
+    @action(detail=False, methods=['get'], url_path='summary')
+    def summary(self, request):
+        """
+        Provides a high-level summary of school finances for the dashboard.
+        Accepts `start_date` and `end_date` query parameters.
+        """
+        school = getattr(getattr(request, 'user', None), 'school', None)
+        
+        # Date range filtering
+        end_date = request.query_params.get('end_date')
+        start_date = request.query_params.get('start_date')
+        try:
+            if end_date:
+                end_date = timezone.make_aware(datetime.strptime(end_date, '%Y-%m-%d'))
+            else:
+                end_date = timezone.now()
+            
+            if start_date:
+                start_date = timezone.make_aware(datetime.strptime(start_date, '%Y-%m-%d'))
+            else:
+                start_date = end_date - timedelta(days=30)
+        except (ValueError, TypeError):
+            end_date = timezone.now()
+            start_date = end_date - timedelta(days=30)
+
+        # Previous period for trend calculation
+        prev_start_date = start_date - (end_date - start_date)
+        prev_end_date = start_date
+
+        # Helper to calculate totals for a given period
+        def get_period_totals(start, end):
+            invoice_qs = Invoice.objects.filter(created_at__range=(start, end))
+            payment_qs = Payment.objects.filter(created_at__range=(start, end))
+            expense_qs = Expense.objects.filter(date__range=(start, end))
+            if school:
+                invoice_qs = invoice_qs.filter(student__klass__school=school)
+                payment_qs = payment_qs.filter(invoice__student__klass__school=school)
+                expense_qs = expense_qs.filter(school=school)
+
+            total_billed = invoice_qs.aggregate(total=Sum('amount'))['total'] or 0
+            total_revenue = payment_qs.aggregate(total=Sum('amount'))['total'] or 0
+            total_expenses = expense_qs.aggregate(total=Sum('amount'))['total'] or 0
+            outstanding_fees = total_billed - total_revenue
+            collection_rate = (total_revenue / total_billed * 100) if total_billed > 0 else 100
+            return {
+                'total_revenue': total_revenue,
+                'outstanding_fees': outstanding_fees,
+                'collection_rate': collection_rate,
+                'total_expenses': total_expenses,
+            }
+
+        current_period = get_period_totals(start_date, end_date)
+        previous_period = get_period_totals(prev_start_date, prev_end_date)
+
+        # Trend calculation
+        def calculate_trend(current, previous):
+            if previous == 0: return 100 if current > 0 else 0
+            return ((current - previous) / previous) * 100
+
+        trends = {
+            'totalRevenue': calculate_trend(current_period['total_revenue'], previous_period['total_revenue']),
+            'outstandingFees': calculate_trend(current_period['outstanding_fees'], previous_period['outstanding_fees']),
+            'collectionRate': current_period['collection_rate'] - previous_period['collection_rate'],
+            'totalExpenses': calculate_trend(current_period['total_expenses'], previous_period['total_expenses']),
+        }
+
+        # Other data (not date-range dependent for now)
+        payment_qs = Payment.objects.all()
+        if school:
+            payment_qs = payment_qs.filter(invoice__student__klass__school=school)
+
+        twelve_months_ago = timezone.now() - timedelta(days=365)
+        revenue_trend_qs = payment_qs.filter(created_at__gte=twelve_months_ago) \
+            .annotate(month=TruncMonth('created_at')) \
+            .values('month') \
+            .annotate(amount=Sum('amount')) \
+            .order_by('month')
+        revenue_trend = [{'month': r['month'].strftime('%b %Y'), 'amount': float(r['amount'])} for r in revenue_trend_qs]
+
+        recent_transactions = payment_qs.order_by('-created_at')[:10]
+        recent_transactions_data = [
+            {'id': p.id, 'date': p.created_at, 'amount': p.amount, 'type': p.method, 'status': 'completed'}
+            for p in recent_transactions
+        ]
+
+        expense_qs = Expense.objects.all()
+        if school: expense_qs = expense_qs.filter(school=school)
+        expense_breakdown_qs = expense_qs.values('category__name').annotate(amount=Sum('amount')).order_by('-amount')
+        expense_breakdown = [{'category': item['category__name'], 'amount': float(item['amount'])} for item in expense_breakdown_qs]
+
+        return Response({
+            'totalRevenue': current_period['total_revenue'],
+            'outstandingFees': current_period['outstanding_fees'],
+            'collectionRate': round(current_period['collection_rate'], 2),
+            'totalExpenses': current_period['total_expenses'],
+            'trends': trends,
+            'revenueTrend': revenue_trend,
+            'expenseBreakdown': expense_breakdown,
+            'recentTransactions': recent_transactions_data,
+        })
+
     @action(detail=True, methods=['post'], url_path='pay', permission_classes=[permissions.IsAuthenticated])
     def pay(self, request, pk=None):
         """Record a payment against this invoice.
@@ -191,6 +295,13 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         else:
             invoice.status = 'unpaid'
         invoice.save(update_fields=['status'])
+
+        # Notify student of payment and updated balance
+        try:
+            from communications.utils import notify_payment_received
+            notify_payment_received(invoice, pay)
+        except Exception:
+            pass
 
         return Response({
             'payment': PaymentSerializer(pay).data,
@@ -491,3 +602,80 @@ class MpesaConfigViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         school = getattr(getattr(self.request, 'user', None), 'school', None)
         serializer.save(school=school)
+
+
+class ExpenseCategoryViewSet(viewsets.ModelViewSet):
+    queryset = ExpenseCategory.objects.all()
+    serializer_class = ExpenseCategorySerializer
+    permission_classes = [IsFinanceOrAdmin]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['school', 'name']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if school:
+            qs = qs.filter(school=school)
+        return qs
+
+    def perform_create(self, serializer):
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        serializer.save(school=school)
+
+
+class ExpenseViewSet(viewsets.ModelViewSet):
+    queryset = Expense.objects.all()
+    serializer_class = ExpenseSerializer
+    permission_classes = [IsFinanceOrAdmin]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['school', 'category', 'date']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if school:
+            qs = qs.filter(school=school)
+        return qs
+
+    def perform_create(self, serializer):
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        serializer.save(school=school, recorded_by=self.request.user)
+
+
+class PocketMoneyWalletViewSet(viewsets.ModelViewSet):
+    queryset = PocketMoneyWallet.objects.all()
+    serializer_class = PocketMoneyWalletSerializer
+    permission_classes = [IsFinanceOrAdmin]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['student']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if school:
+            qs = qs.filter(student__klass__school=school)
+        return qs
+
+
+class PocketMoneyTransactionViewSet(viewsets.ModelViewSet):
+    queryset = PocketMoneyTransaction.objects.all()
+    serializer_class = PocketMoneyTransactionSerializer
+    permission_classes = [IsFinanceOrAdmin]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['wallet', 'transaction_type']
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        school = getattr(getattr(self.request, 'user', None), 'school', None)
+        if school:
+            qs = qs.filter(wallet__student__klass__school=school)
+        return qs
+
+    def perform_create(self, serializer):
+        transaction = serializer.save(recorded_by=self.request.user)
+        wallet = transaction.wallet
+        if transaction.transaction_type == 'deposit':
+            wallet.balance += transaction.amount
+        elif transaction.transaction_type == 'withdrawal':
+            wallet.balance -= transaction.amount
+        wallet.save()

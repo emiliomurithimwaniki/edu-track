@@ -1,0 +1,32 @@
+{
+  "school_name": "Greenfield Academy",
+  "school_address": "123 School Lane, Nairobi",
+  "school_phone": "+254 700 000000",
+  "school_email": "accounts@greenfield.ac.ke",
+  "school_website": "https://greenfield.ac.ke",
+  "guardian_name": "Parent/Guardian of Hannah Watson",
+  "student_name": "Hannah Watson",
+  "admission_no": "GF-170",
+  "class_name": "Grade 4 B",
+  "term_name": "Term 3, 2025",
+  "statement_date": "04 Oct 2025",
+  "currency": "KES",
+  "prepared_by": "Bursar",
+  "statement_ref": "STMT-25-000123",
+  "assessment": [
+    { "item": "Tuition", "term": "T3", "due_date": "2025-09-10", "amount": "4,000" },
+    { "item": "Library", "term": "T3", "due_date": "2025-09-15", "amount": "500" },
+    { "item": "Transport", "term": "T3", "due_date": "2025-09-20", "amount": "1,000" }
+  ],
+  "payments": [
+    { "date": "2025-09-08", "method": "Mpesa", "reference": "MP123ABC", "amount": "1,500" },
+    { "date": "2025-09-25", "method": "Bank", "reference": "BK778899", "amount": "500" }
+  ],
+  "total_assessed": "5,500",
+  "total_adjustments": "0",
+  "total_paid": "2,000",
+  "balance_due": "3,500",
+  "balance_due_date": "2025-10-15",
+  "pay_now_url": "https://pay.example.com/invoice/STMT-25-000123",
+  "year": "2025"
+}

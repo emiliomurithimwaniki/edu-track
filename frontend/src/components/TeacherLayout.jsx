@@ -3,11 +3,14 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth'
 import api from '../api'
 
-const navItems = [
+const baseNavItems = [
   { to: '/teacher', label: 'Dashboard', icon: '📊' },
-  { to: '/teacher/attendance', label: 'Attendance', icon: '🗓️' },
+  // Attendance will be conditionally added based on class-teacher access
   { to: '/teacher/lessons', label: 'Lessons', icon: '🧭' },
   { to: '/teacher/grades', label: 'Grades', icon: '📝' },
+  { to: '/teacher/results', label: 'Results', icon: '📈' },
+  { to: '/teacher/analytics', label: 'Analytics', icon: '📊' },
+  { to: '/teacher/timetable', label: 'Timetable', icon: '📆' },
   { to: '/teacher/classes', label: 'Classes', icon: '📚' },
   { to: '/teacher/messages', label: 'Messages', icon: '✉️' },
   { to: '/teacher/profile', label: 'Profile', icon: '👤' },
@@ -23,6 +26,9 @@ export default function TeacherLayout({ children }){
   const [schoolLogo, setSchoolLogo] = useState('')
   const [currentTerm, setCurrentTerm] = useState(null)
   const [currentYear, setCurrentYear] = useState(null)
+  const [hasAttendanceAccess, setHasAttendanceAccess] = useState(false)
+  const [classTeacherClassId, setClassTeacherClassId] = useState('')
+  const [unreadCount, setUnreadCount] = useState(0)
 
   useEffect(() => { setIsMobileOpen(false) }, [pathname])
 
@@ -41,6 +47,66 @@ export default function TeacherLayout({ children }){
       }
     })()
     return () => { mounted = false }
+  }, [])
+
+  // Poll unread messages (inbox + system)
+  useEffect(() => {
+    let mounted = true
+    const computeUnread = (arr) => {
+      const myId = user?.id
+      if (!Array.isArray(arr) || !myId) return 0
+      return arr.reduce((acc, m) => {
+        const rec = Array.isArray(m.recipients) ? m.recipients : []
+        const mine = rec.find(r => r.user === myId)
+        return acc + (mine && !mine.read ? 1 : 0)
+      }, 0)
+    }
+    const load = async () => {
+      try {
+        const [inb, sys] = await Promise.allSettled([
+          api.get('/communications/messages/'),
+          api.get('/communications/messages/system/'),
+        ])
+        const inboxList = inb.status === 'fulfilled' ? (Array.isArray(inb.value.data) ? inb.value.data : (inb.value.data?.results || [])) : []
+        const sysList = sys.status === 'fulfilled' ? (Array.isArray(sys.value.data) ? sys.value.data : (sys.value.data?.results || [])) : []
+        const total = computeUnread(inboxList) + computeUnread(sysList)
+        if (mounted) setUnreadCount(total)
+      } catch {
+        if (mounted) setUnreadCount(0)
+      }
+    }
+    load()
+    const id = setInterval(load, 15000)
+    return () => { mounted = false; clearInterval(id) }
+  }, [user])
+
+  // Decide if user is a class teacher to show Attendance
+  useEffect(()=>{
+    let mounted = true
+    ;(async()=>{
+      try{
+        const [meRes, clsRes] = await Promise.all([
+          api.get('/auth/me/').catch(()=>({ data:null })),
+          api.get('/academics/classes/mine/').catch(()=>({ data:[] })),
+        ])
+        if (!mounted) return
+        const meId = String(meRes?.data?.id || '')
+        const classes = Array.isArray(clsRes?.data)? clsRes.data : []
+        const mine = classes.find(c => {
+          const tid = c?.teacher
+          const tdet = c?.teacher_detail
+          const candIds = [
+            tid,
+            tdet?.id,
+            tdet?.user?.id,
+          ].map(v=> (v==null? '' : String(v)))
+          return candIds.includes(meId)
+        })
+        setHasAttendanceAccess(!!mine)
+        setClassTeacherClassId(mine ? String(mine.id) : '')
+      }catch{ if(mounted){ setHasAttendanceAccess(false); setClassTeacherClassId('') } }
+    })()
+    return ()=>{ mounted=false }
   }, [])
 
   // Load current term/year with graceful fallbacks
@@ -165,7 +231,7 @@ export default function TeacherLayout({ children }){
         {/* Sidebar */}
         <aside className={`fixed z-40 top-14 left-0 bottom-0 bg-slate-800 border-r border-slate-700/30 transition-all duration-200 ${sidebarBase} hidden md:flex flex-col shadow-xl`}> 
           <nav className="p-2 space-y-1 overflow-y-auto">
-            {navItems.map(i => {
+            {([ ...(hasAttendanceAccess? [{ to: '/teacher/attendance', label: 'Attendance', icon: '🗓️' }] : []), ...baseNavItems ]).map(i => {
               const active = pathname === i.to
               return (
                 <Link key={i.to} to={i.to}
@@ -177,8 +243,13 @@ export default function TeacherLayout({ children }){
                 >
                   <span className="text-lg w-5 text-center" aria-hidden>{i.icon}</span>
                   {isOpen && (
-                    <span className="text-sm font-medium truncate transition-all duration-300 group-hover:translate-x-1">
+                    <span className="relative inline-flex items-center gap-2 text-sm font-medium truncate transition-all duration-300 group-hover:translate-x-1">
                       {i.label}
+                      {i.label === 'Messages' && unreadCount > 0 && (
+                        <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] bg-red-600 text-white">
+                          {unreadCount > 99 ? '99+' : unreadCount}
+                        </span>
+                      )}
                     </span>
                   )}
                 </Link>
@@ -198,7 +269,7 @@ export default function TeacherLayout({ children }){
         {/* Mobile Drawer Sidebar */}
         <aside className={`fixed z-40 top-14 left-0 bottom-0 bg-slate-800 border-r border-slate-700/30 w-64 p-2 md:hidden transition-transform duration-200 shadow-2xl ${isMobileOpen? 'translate-x-0':'-translate-x-full'}`}>
           <nav className="space-y-1 overflow-y-auto">
-            {navItems.map(i => {
+            {([ ...(hasAttendanceAccess? [{ to: '/teacher/attendance', label: 'Attendance', icon: '🗓️' }] : []), ...baseNavItems ]).map(i => {
               const active = pathname === i.to
               return (
                 <Link key={i.to} to={i.to}
@@ -208,7 +279,14 @@ export default function TeacherLayout({ children }){
                   } flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200`}
                 >
                   <span className="text-lg" aria-hidden>{i.icon}</span>
-                  <span className="text-sm font-medium">{i.label}</span>
+                  <span className="relative inline-flex items-center gap-2 text-sm font-medium">
+                    {i.label}
+                    {i.label === 'Messages' && unreadCount > 0 && (
+                      <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] bg-red-600 text-white">
+                        {unreadCount > 99 ? '99+' : unreadCount}
+                      </span>
+                    )}
+                  </span>
                 </Link>
               )
             })}

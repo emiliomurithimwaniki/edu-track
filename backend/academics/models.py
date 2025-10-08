@@ -2,14 +2,42 @@ from django.db import models
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time
 
 class Subject(models.Model):
+    CATEGORY_CHOICES = (
+        ("language", "Language"),
+        ("science", "Science"),
+        ("arts", "Arts"),
+        ("humanities", "Humanities"),
+        ("other", "Other"),
+    )
     code = models.CharField(max_length=50, unique=True)
     name = models.CharField(max_length=100)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default="other")
+    is_priority = models.BooleanField(default=False, help_text="If true, this subject is prioritized in timetable generation.")
     school = models.ForeignKey('accounts.School', on_delete=models.CASCADE, null=True, blank=True)
     def __str__(self):
         return f"{self.code} - {self.name}"
+
+class SubjectComponent(models.Model):
+    """A component/paper of a subject (e.g., English -> Paper 1, Paper 2).
+    Keeps Subject as the atomic unit across timetable/assignments while allowing
+    results to be captured per component.
+    """
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE, related_name='components')
+    code = models.CharField(max_length=50)
+    name = models.CharField(max_length=100)
+    max_marks = models.FloatField(null=True, blank=True, help_text="Optional max marks for this component")
+    weight = models.FloatField(null=True, blank=True, help_text="Optional weight for aggregation (defaults to simple sum)")
+    order = models.IntegerField(default=0)
+
+    class Meta:
+        unique_together = ("subject", "code")
+        ordering = ["subject", "order", "code"]
+
+    def __str__(self):
+        return f"{self.subject.code} - {self.code} ({self.name})"
 
 class Stream(models.Model):
     name = models.CharField(max_length=100)
@@ -155,6 +183,8 @@ class TeacherProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     subjects = models.CharField(max_length=255, blank=True)
     klass = models.ForeignKey(Class, null=True, blank=True, on_delete=models.SET_NULL)
+    # Allows delegating timetable management to selected teachers
+    can_manage_timetable = models.BooleanField(default=False, help_text="If true, this teacher can manage timetable data (create/update).")
 
 class Student(models.Model):
     admission_no = models.CharField(max_length=50, unique=True)
@@ -211,7 +241,11 @@ class LessonPlan(models.Model):
     teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     klass = models.ForeignKey(Class, on_delete=models.CASCADE)
     subject = models.ForeignKey(Subject, on_delete=models.SET_NULL, null=True, blank=True)
+    # Optional explicit date of lesson; for planning by week/term use fields below
     date = models.DateField()
+    # New: plan scoping by academic term and week number (1-13)
+    term = models.ForeignKey('Term', on_delete=models.SET_NULL, null=True, blank=True, related_name='lesson_plans')
+    week = models.IntegerField(null=True, blank=True, help_text="Week number within the term (1-13)")
     topic = models.CharField(max_length=255)
     objectives = models.TextField(blank=True)
     activities = models.TextField(blank=True)
@@ -221,7 +255,8 @@ class LessonPlan(models.Model):
 
     def __str__(self):
         subj = f" - {self.subject.code}" if self.subject else ""
-        return f"{self.date} {self.klass}{subj}: {self.topic}"
+        scope = f" T{getattr(self.term, 'number', '')} W{self.week}" if (self.term_id and self.week) else ""
+        return f"{self.date} {self.klass}{subj}{scope}: {self.topic}"
 
 # ===== Exams =====
 class Exam(models.Model):
@@ -248,10 +283,11 @@ class ExamResult(models.Model):
     exam = models.ForeignKey(Exam, on_delete=models.CASCADE, related_name='results')
     student = models.ForeignKey(Student, on_delete=models.CASCADE)
     subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
+    component = models.ForeignKey('SubjectComponent', on_delete=models.CASCADE, null=True, blank=True, related_name='results')
     marks = models.FloatField()
 
     class Meta:
-        unique_together = ("exam","student","subject")
+        unique_together = ("exam","student","subject","component")
 
 
 # ===== Class Subject Teacher Assignment =====
@@ -616,6 +652,10 @@ class TimetableEntry(models.Model):
     teacher = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='timetable_entries')
     room = models.ForeignKey(Room, null=True, blank=True, on_delete=models.SET_NULL, related_name='timetable_entries')
 
+    # Optional grouping/versioning
+    plan = models.ForeignKey('TimetablePlan', null=True, blank=True, on_delete=models.SET_NULL, related_name='entries')
+    version = models.ForeignKey('TimetableVersion', null=True, blank=True, on_delete=models.SET_NULL, related_name='entries')
+
     notes = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -626,6 +666,9 @@ class TimetableEntry(models.Model):
             models.Index(fields=["term", "day_of_week", "klass"]),
             models.Index(fields=["term", "day_of_week", "teacher"]),
             models.Index(fields=["term", "day_of_week", "room"]),
+            models.Index(fields=["version", "day_of_week", "klass", "start_time"]),
+            models.Index(fields=["version", "day_of_week", "teacher", "start_time"]),
+            models.Index(fields=["version", "day_of_week", "room", "start_time"]),
         ]
 
     def clean(self):
@@ -671,3 +714,142 @@ class TimetableEntry(models.Model):
     def __str__(self):
         dow = dict(self.DAY_CHOICES).get(self.day_of_week, self.day_of_week)
         return f"{self.klass} {self.subject.code} {dow} {self.start_time}-{self.end_time}"
+
+
+# ===== Timetable Planning (Templates, Plans, Versions) =====
+class TimetableTemplate(models.Model):
+    """Reusable weekly template defining days and period structure for lessons/breaks/lunch."""
+    school = models.ForeignKey('accounts.School', on_delete=models.CASCADE, related_name='timetable_templates')
+    name = models.CharField(max_length=100)
+    default_period_minutes = models.IntegerField(default=40)
+    start_of_day = models.TimeField(default=time(8, 0))
+    # Store active day numbers (1=Mon ... 5=Fri) as list
+    days_active = models.JSONField(default=list)
+    is_default = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = ("school", "name")
+        ordering = ["school", "name"]
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.is_default:
+            TimetableTemplate.objects.filter(school=self.school).exclude(pk=self.pk).update(is_default=False)
+
+    def __str__(self):
+        return f"{self.name} ({getattr(self.school,'name', self.school_id)})"
+
+
+class PeriodSlotTemplate(models.Model):
+    KIND_CHOICES = (
+        ('lesson', 'Lesson'),
+        ('break', 'Break'),
+        ('lunch', 'Lunch'),
+    )
+    template = models.ForeignKey(TimetableTemplate, on_delete=models.CASCADE, related_name='periods')
+    period_index = models.IntegerField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    kind = models.CharField(max_length=10, choices=KIND_CHOICES, default='lesson')
+    label = models.CharField(max_length=50, blank=True)
+
+    class Meta:
+        ordering = ["template", "period_index"]
+        unique_together = ("template", "period_index")
+
+    def clean(self):
+        if self.end_time and self.start_time and self.end_time <= self.start_time:
+            raise DjangoValidationError({"end_time": "End time must be after start time"})
+
+    def __str__(self):
+        return f"{self.template.name} P{self.period_index} {self.start_time}-{self.end_time} ({self.kind})"
+
+
+class TimetablePlan(models.Model):
+    """Plan binds a template to a specific term and scope of classes; versions store generated entries."""
+    school = models.ForeignKey('accounts.School', on_delete=models.CASCADE, related_name='timetable_plans')
+    term = models.ForeignKey(Term, on_delete=models.CASCADE, related_name='timetable_plans')
+    template = models.ForeignKey(TimetableTemplate, on_delete=models.PROTECT, related_name='plans')
+    name = models.CharField(max_length=120)
+    status = models.CharField(max_length=20, default='draft')  # draft|generated|published|archived
+    notes = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    # Persist block assignments so teachers on other devices can see them.
+    # Shape: { "<day>-<classId>-<periodIndex>": { "subjectId": <id> } }
+    block_assignments = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("school", "term", "name")
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name} — {self.term}"
+
+
+class TimetableClassConfig(models.Model):
+    plan = models.ForeignKey(TimetablePlan, on_delete=models.CASCADE, related_name='class_configs')
+    klass = models.ForeignKey(Class, on_delete=models.CASCADE)
+    room_preference = models.ForeignKey(Room, null=True, blank=True, on_delete=models.SET_NULL)
+    active_days_override = models.JSONField(null=True, blank=True)
+    period_minutes_override = models.IntegerField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ("plan", "klass")
+
+    def __str__(self):
+        return f"{self.plan.name} — {self.klass}"
+
+
+class ClassSubjectQuota(models.Model):
+    plan = models.ForeignKey(TimetablePlan, on_delete=models.CASCADE, related_name='subject_quotas')
+    klass = models.ForeignKey(Class, on_delete=models.CASCADE)
+    subject = models.ForeignKey(Subject, on_delete=models.CASCADE)
+    weekly_periods = models.IntegerField()
+    min_gap_periods = models.IntegerField(default=0)
+
+    class Meta:
+        unique_together = ("plan", "klass", "subject")
+
+    def __str__(self):
+        return f"{self.klass} {self.subject.code}: {self.weekly_periods}/wk"
+
+
+class TeacherAvailability(models.Model):
+    teacher = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    day_of_week = models.IntegerField(choices=TimetableEntry.DAY_CHOICES)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    is_available = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["teacher", "day_of_week", "start_time"]
+
+    def clean(self):
+        if self.end_time and self.start_time and self.end_time <= self.start_time:
+            raise DjangoValidationError({"end_time": "End time must be after start time"})
+
+    def __str__(self):
+        return f"{getattr(self.teacher,'username', self.teacher_id)} D{self.day_of_week} {self.start_time}-{self.end_time} {'FREE' if self.is_available else 'BLOCK'}"
+
+
+class TimetableVersion(models.Model):
+    plan = models.ForeignKey(TimetablePlan, on_delete=models.CASCADE, related_name='versions')
+    label = models.CharField(max_length=50)
+    is_current = models.BooleanField(default=False)
+    rationale = models.TextField(blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("plan", "label")
+        ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if self.is_current:
+            TimetableVersion.objects.filter(plan=self.plan).exclude(pk=self.pk).update(is_current=False)
+
+    def __str__(self):
+        return f"{self.plan.name} — {self.label}{' (current)' if self.is_current else ''}"

@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
 
 export default function StudentDashboard(){
+  const { pathname } = useLocation()
   const [student, setStudent] = useState(null)
   const [assessments, setAssessments] = useState([])
   const [attendance, setAttendance] = useState([])
@@ -17,7 +18,17 @@ export default function StudentDashboard(){
   const [payForm, setPayForm] = useState({ amount: '', method: 'mpesa', reference: '' })
   const [payError, setPayError] = useState('')
   const [paySubmitting, setPaySubmitting] = useState(false)
-  const [tab, setTab] = useState('dashboard') // dashboard | academics | finance
+  // Derive current tab from URL: /student, /student/academics, /student/finance
+  const currentTab = useMemo(() => {
+    if (pathname.includes('/student/academics')) return 'academics'
+    if (pathname.includes('/student/finance')) return 'finance'
+    return 'dashboard'
+  }, [pathname])
+  // Edit contact details
+  const [showEdit, setShowEdit] = useState(false)
+  const [editForm, setEditForm] = useState({ email: '', phone: '', address: '' })
+  const [editSubmitting, setEditSubmitting] = useState(false)
+  const [editError, setEditError] = useState('')
   // Derived: performance data over time (average marks per exam)
   const performance = useMemo(() => {
     if (!Array.isArray(examResults) || examResults.length === 0) return []
@@ -47,8 +58,8 @@ export default function StudentDashboard(){
 
         // Load finances and records in parallel
         const [assRes, attRes, exmRes, invRes, sumRes] = await Promise.all([
-          api.get(`/academics/assessments/?student=${st.id}`),
-          api.get(`/academics/attendance/?student=${st.id}`),
+          api.get(`/academics/assessments/my/`),
+          api.get(`/academics/attendance/my/`),
           api.get(`/academics/exam_results/?student=${st.id}`),
           api.get('/finance/invoices/my/'),
           api.get('/finance/invoices/my-summary/'),
@@ -120,13 +131,9 @@ export default function StudentDashboard(){
   }
   return (
     <div className="p-6 space-y-6">
-      {/* Header banner */}
-      <div className="bg-green-600 text-white rounded shadow p-3 flex items-center justify-between">
+      {/* Header banner (no buttons; navigation is in sidebar) */}
+      <div className="bg-green-600 text-white rounded shadow p-3">
         <div className="font-medium">Welcome {student?.name ? student.name.toUpperCase() : ''}</div>
-        <div className="flex items-center gap-3">
-          <div className="text-xs opacity-90">Dashboard</div>
-          <Link to="/student/messages" className="px-3 py-1 rounded bg-white/20 hover:bg-white/30 text-white text-xs">Messages</Link>
-        </div>
       </div>
 
       {loading && (
@@ -136,23 +143,9 @@ export default function StudentDashboard(){
         <div className="bg-red-50 text-red-700 p-3 rounded">{error}</div>
       )}
 
-      {/* Tabs */}
-      <div className="flex gap-2">
-        <button
-          className={`px-3 py-1.5 rounded ${tab==='dashboard'?'bg-blue-600 text-white':'bg-gray-100 text-gray-800'}`}
-          onClick={()=>setTab('dashboard')}
-        >Dashboard</button>
-        <button
-          className={`px-3 py-1.5 rounded ${tab==='academics'?'bg-blue-600 text-white':'bg-gray-100 text-gray-800'}`}
-          onClick={()=>setTab('academics')}
-        >Academics</button>
-        <button
-          className={`px-3 py-1.5 rounded ${tab==='finance'?'bg-blue-600 text-white':'bg-gray-100 text-gray-800'}`}
-          onClick={()=>setTab('finance')}
-        >Finance</button>
-      </div>
+      {/* Sidebar now handles navigation; in-page tab buttons removed */}
 
-      {tab === 'dashboard' && (
+      {currentTab === 'dashboard' && (
         <>
           {/* Summary cards */}
           <div className="grid md:grid-cols-3 gap-4">
@@ -176,7 +169,13 @@ export default function StudentDashboard(){
           {/* User Profile */}
           {student && (
             <div className="bg-white rounded shadow p-0 overflow-hidden">
-              <div className="border-b px-4 py-2 font-medium">User Profile</div>
+              <div className="border-b px-4 py-2 font-medium flex items-center justify-between">
+                <span>User Profile</span>
+                <button
+                  className="text-sm px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700"
+                  onClick={()=>{ setEditError(''); setEditForm({ email: student.email || '', phone: student.guardian_id || '', address: student.address || '' }); setShowEdit(true) }}
+                >Edit</button>
+              </div>
               <div className="grid md:grid-cols-3 gap-0">
                 <div className="p-4 border-r">
                   <div className="w-40 h-40 bg-gray-100 rounded overflow-hidden flex items-center justify-center">
@@ -204,8 +203,8 @@ export default function StudentDashboard(){
                       <div className="font-medium">{student.passport_no || '-'}</div>
                     </div>
                     <div>
-                      <div className="text-gray-500">Phone Number</div>
-                      <div className="font-medium">{student.phone || '-'}</div>
+                      <div className="text-gray-500">Parent/Guardian Phone</div>
+                      <div className="font-medium">{student.guardian_id || '-'}</div>
                     </div>
                     <div>
                       <div className="text-gray-500">Gender</div>
@@ -219,10 +218,7 @@ export default function StudentDashboard(){
                       <div className="text-gray-500">Class</div>
                       <div className="font-medium">{classLabel}</div>
                     </div>
-                    <div>
-                      <div className="text-gray-500">Guardian ID/Phone</div>
-                      <div className="font-medium">{student.guardian_id || '-'}</div>
-                    </div>
+                    {/* Guardian shown above as Phone Number */}
                     <div>
                       <div className="text-gray-500">Email</div>
                       <div className="font-medium">{student.email || '-'}</div>
@@ -239,7 +235,7 @@ export default function StudentDashboard(){
         </>
       )}
 
-      {tab === 'academics' && (
+      {currentTab === 'academics' && (
         <>
           {/* Assessments and Attendance */}
           <div className="grid md:grid-cols-2 gap-6">
@@ -333,7 +329,7 @@ export default function StudentDashboard(){
         </>
       )}
 
-      {tab === 'finance' && (
+      {currentTab === 'finance' && (
       <div className="bg-white rounded shadow p-4">
         <div className="flex items-center justify-between mb-2">
           <h2 className="font-medium">My Fees</h2>
@@ -420,6 +416,58 @@ export default function StudentDashboard(){
             </div>
           </form>
         )}
+      </Modal>
+
+      {/* Edit Contact Modal */}
+      <Modal open={showEdit} onClose={()=>setShowEdit(false)} title="Edit Contact Details" size="sm">
+        <form
+          onSubmit={async (e)=>{
+            e.preventDefault()
+            setEditSubmitting(true)
+            setEditError('')
+            try{
+              const payload = {
+                email: editForm.email?.trim() || '',
+                phone: editForm.phone?.trim() || '',
+                address: editForm.address?.trim() || '',
+              }
+              // Basic client validation
+              if (payload.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)){
+                setEditError('Enter a valid email address')
+                setEditSubmitting(false)
+                return
+              }
+              await api.patch('/academics/students/my/update/', payload)
+              // Refresh student data
+              const stRes = await api.get('/academics/students/my/')
+              setStudent(stRes.data)
+              setShowEdit(false)
+            }catch(err){
+              setEditError(err?.response?.data?.detail || err?.message || 'Update failed')
+            }finally{
+              setEditSubmitting(false)
+            }
+          }}
+          className="grid gap-3"
+        >
+          {editError && <div className="bg-red-50 text-red-700 text-sm p-2 rounded">{editError}</div>}
+          <label className="grid gap-1 text-sm">
+            <span className="text-gray-600">Email</span>
+            <input className="border p-2 rounded" type="email" value={editForm.email} onChange={e=>setEditForm({...editForm, email:e.target.value})} placeholder="e.g. student@email.com" />
+          </label>
+          <label className="grid gap-1 text-sm">
+            <span className="text-gray-600">Parent/Guardian Phone</span>
+            <input className="border p-2 rounded" value={editForm.phone} onChange={e=>setEditForm({...editForm, phone:e.target.value})} placeholder="Enter parent/guardian phone e.g. 0712345678" />
+          </label>
+          <label className="grid gap-1 text-sm">
+            <span className="text-gray-600">Postal Address</span>
+            <textarea className="border p-2 rounded min-h-[80px]" value={editForm.address} onChange={e=>setEditForm({...editForm, address:e.target.value})} placeholder="e.g. P.O. Box 12345, Nairobi" />
+          </label>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="px-4 py-2 rounded border" onClick={()=>setShowEdit(false)}>Cancel</button>
+            <button className="px-4 py-2 rounded text-white bg-blue-600 disabled:opacity-60" disabled={editSubmitting}>{editSubmitting? 'Saving…':'Save'}</button>
+          </div>
+        </form>
       </Modal>
     </div>
   )

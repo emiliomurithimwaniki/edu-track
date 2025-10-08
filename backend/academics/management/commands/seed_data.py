@@ -73,11 +73,18 @@ class Command(BaseCommand):
             self.style.SUCCESS(f'  - Classes per school: {9 * streams_per_school} (9 grades x {streams_per_school} streams)')
         )
 
-        # Subject names for seeding
-        subject_names = [
-            'Mathematics', 'English', 'Kiswahili', 'Science', 'Social Studies',
-            'Religious Education', 'Physical Education', 'Art', 'Music',
-            'Computer Studies', 'Home Science', 'Agriculture', 'Business Studies'
+        # Subject catalog (requested)
+        subject_catalog = [
+            { 'name': 'Mathematics',           'abbr': 'MAT', 'category': 'science' },
+            { 'name': 'English',               'abbr': 'ENG', 'category': 'language' },
+            { 'name': 'Kiswahili',             'abbr': 'KIS', 'category': 'language' },
+            { 'name': 'Integrated Science',    'abbr': 'ISC', 'category': 'science' },
+            { 'name': 'Social Studies',        'abbr': 'SST', 'category': 'humanities' },
+            { 'name': 'Arts',                  'abbr': 'ART', 'category': 'arts' },
+            { 'name': 'Music',                 'abbr': 'MUS', 'category': 'arts' },
+            { 'name': 'Religious Education',   'abbr': 'RE',  'category': 'humanities' },
+            { 'name': 'Physical Education',    'abbr': 'PE',  'category': 'other' },
+            { 'name': 'P.P.I',                 'abbr': 'PPI', 'category': 'other' },
         ]
 
         # Teacher names for variety
@@ -191,22 +198,21 @@ class Command(BaseCommand):
 
         # Create subjects
         subjects = []
-        for subject_name in subject_names:
-            # Create subject for each school
-            for school in schools:
-                # Ensure unique code across all schools by prefixing with school code
-                subject_code = f"{school.code}-{subject_name[:3].upper()}"
+        for school in schools:
+            for spec in subject_catalog:
+                subject_code = f"{school.code}-{spec['abbr']}"
                 subject, created = Subject.objects.get_or_create(
                     code=subject_code,
                     defaults={
-                        'name': subject_name,
+                        'name': spec['name'],
+                        'category': spec['category'],
                         'school': school,
                     }
                 )
                 if created:
                     subjects.append(subject)
                     self.stdout.write(
-                        self.style.SUCCESS(f'Created subject: {subject.name} for {school.name}')
+                        self.style.SUCCESS(f"Created subject: {subject.name} for {school.name}")
                     )
 
         # Create classes
@@ -225,9 +231,8 @@ class Command(BaseCommand):
                     )
 
                     if created:
-                        # Assign subjects to class
-                        class_subjects = random.sample(school_subjects, min(8, len(school_subjects)))
-                        class_obj.subjects.set(class_subjects)
+                        # Assign ALL catalog subjects to class (as requested)
+                        class_obj.subjects.set(school_subjects)
                         total_classes_created += 1
                         self.stdout.write(
                             self.style.SUCCESS(f'Created class: {class_obj.name} for {school.name}')
@@ -261,8 +266,8 @@ class Command(BaseCommand):
                     school=school
                 )
 
-                # Create teacher profile
-                teacher_subjects = random.sample(school_subjects, random.randint(2, 5))
+                # Create teacher profile (random subset of catalog subjects for expertise)
+                teacher_subjects = random.sample(school_subjects, min(len(school_subjects), random.randint(2, 5)))
                 subjects_str = ', '.join([s.name for s in teacher_subjects])
 
                 TeacherProfile.objects.create(
@@ -302,17 +307,22 @@ class Command(BaseCommand):
                     tp.klass = klass
                     tp.save(update_fields=['klass'])
 
-            # Subject teacher assignment
+            # Subject teacher assignment (ensure every class-subject has a teacher)
             for klass in school_classes:
                 for subject in klass.subjects.all():
-                    # Prefer a teacher whose profile includes the subject name
-                    preferred = []
-                    for t in school_teachers:
-                        tp = teacher_profiles.get(t.id)
-                        subs = [s.strip().lower() for s in tp.subjects.split(',')] if tp and tp.subjects else []
-                        if subject.name.lower() in subs:
-                            preferred.append(t)
-                    assigned_teacher = random.choice(preferred) if preferred else random.choice(school_teachers)
+                    # P.P.I should be assigned to the class teacher (if available)
+                    subj_name_norm = subject.name.replace('.', '').strip().lower()
+                    if subj_name_norm == 'ppi' and klass.teacher:
+                        assigned_teacher = klass.teacher
+                    else:
+                        # Prefer a teacher whose profile includes the subject name
+                        preferred = []
+                        for t in school_teachers:
+                            tp = teacher_profiles.get(t.id)
+                            subs = [s.strip().lower() for s in tp.subjects.split(',')] if tp and tp.subjects else []
+                            if subject.name.lower() in subs:
+                                preferred.append(t)
+                        assigned_teacher = random.choice(preferred) if preferred else random.choice(school_teachers)
                     ClassSubjectTeacher.objects.get_or_create(
                         klass=klass,
                         subject=subject,
