@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import AppLogo from '../components/AppLogo'
 import { Link } from 'react-router-dom'
 
 // Lazy load wrapper using IntersectionObserver
@@ -24,6 +25,21 @@ function LazySection({ children, rootMargin = '0px 0px -10% 0px' }) {
   )
 }
 
+// Reusable check icon for feature lists
+function Check({ className = '' }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      className={`h-5 w-5 text-green-600 ${className}`}
+      aria-hidden="true"
+    >
+      <path fillRule="evenodd" d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.6a1 1 0 0 1-1.43.01L3.29 10.82a1 1 0 1 1 1.42-1.41l3.03 3.05 6.79-6.883a1 1 0 0 1 1.174-.287Z" clipRule="evenodd" />
+    </svg>
+  )
+}
+
 export default function LandingPage() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const whatsappNumber = '+254796031071'
@@ -40,19 +56,32 @@ export default function LandingPage() {
     { bg: 'bg-lime-600/10', text: 'text-lime-700' },
     { bg: 'bg-teal-600/10', text: 'text-teal-700' },
   ]
+  // pricing cycle: 'monthly' or 'annual' (annual = 2 months free)
+  const [billingCycle, setBillingCycle] = useState(() => {
+    const params = new URLSearchParams(window.location.search)
+    const qp = params.get('billing')
+    const stored = localStorage.getItem('billingCycle')
+    return (qp === 'annual' || qp === 'monthly') ? qp : (stored || 'monthly')
+  })
+  useEffect(() => {
+    try { localStorage.setItem('billingCycle', billingCycle) } catch {}
+    const url = new URL(window.location.href)
+    url.searchParams.set('billing', billingCycle)
+    window.history.replaceState({}, '', url)
+  }, [billingCycle])
   return (
     <div className="min-h-screen bg-white text-gray-800">
       {/* Header */}
       <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-gray-100">
         <div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <img src="/logo.jpg" alt="EduTrack Logo" className="h-9 w-9 rounded-lg object-contain" />
+            <AppLogo size={36} className="h-9 w-9 rounded-lg" />
             <span className="text-xl font-semibold tracking-tight">EduTrack</span>
           </div>
           <nav className="hidden md:flex items-center gap-8 text-sm text-gray-600">
             <a href="#features" className="hover:text-gray-900">Features</a>
             <a href="#advantages" className="hover:text-gray-900">Advantages</a>
-            <a href="#pricing" className="hover:text-gray-900">Pricing</a>
+            <a href="#plan-pro" className="hover:text-gray-900">Pricing</a>
             <a href="#contact" className="hover:text-gray-900">Contact</a>
           </nav>
           <div className="hidden md:flex items-center gap-3">
@@ -79,7 +108,7 @@ export default function LandingPage() {
             <div className="px-6 py-4 flex flex-col gap-3 text-gray-700">
               <a href="#features" onClick={() => setMobileOpen(false)} className="py-2">Features</a>
               <a href="#advantages" onClick={() => setMobileOpen(false)} className="py-2">Advantages</a>
-              <a href="#pricing" onClick={() => setMobileOpen(false)} className="py-2">Pricing</a>
+              <a href="#plan-pro" onClick={() => setMobileOpen(false)} className="py-2">Pricing</a>
               <a href="#contact" onClick={() => setMobileOpen(false)} className="py-2">Contact</a>
               <div className="flex gap-3 pt-2">
                 <Link to="/login" onClick={() => setMobileOpen(false)} className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 border border-gray-200 rounded-lg text-center">Sign in</Link>
@@ -140,63 +169,84 @@ export default function LandingPage() {
             </div>
           </div>
         </div>
+        {/* Compare plans */}
+        <div className="mt-14 overflow-x-auto">
+          <table className="w-full text-sm text-left border border-gray-200 rounded-lg overflow-hidden bg-white">
+            <thead className="bg-gray-50 text-gray-700">
+              <tr>
+                <th className="px-4 py-3">Feature</th>
+                <th className="px-4 py-3">Starter</th>
+                <th className="px-4 py-3">Pro</th>
+                <th className="px-4 py-3">Growth</th>
+                <th className="px-4 py-3">Enterprise</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              <tr>
+                <td className="px-4 py-3 text-gray-700">Students limit</td>
+                <td className="px-4 py-3">Up to 200</td>
+                <td className="px-4 py-3">Unlimited</td>
+                <td className="px-4 py-3">Unlimited</td>
+                <td className="px-4 py-3">Unlimited</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-3 text-gray-700">Finance suite</td>
+                <td className="px-4 py-3">Basic (no POS)</td>
+                <td className="px-4 py-3">Full</td>
+                <td className="px-4 py-3">Full</td>
+                <td className="px-4 py-3">Full + custom</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-3 text-gray-700">Messaging</td>
+                <td className="px-4 py-3">Email only</td>
+                <td className="px-4 py-3">Email + notifications</td>
+                <td className="px-4 py-3">Email + notifications</td>
+                <td className="px-4 py-3">All channels</td>
+              </tr>
+              <tr>
+                <td className="px-4 py-3 text-gray-700">Support</td>
+                <td className="px-4 py-3">Email</td>
+                <td className="px-4 py-3">Priority</td>
+                <td className="px-4 py-3">Priority</td>
+                <td className="px-4 py-3">Dedicated manager</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
+      
 
       {/* Features */}
-      <section id="features" className="mx-auto max-w-7xl px-6 py-16">
-        <div className="text-center max-w-3xl mx-auto">
-          <h2 className="text-3xl font-bold text-gray-900">Everything you need to manage a modern school</h2>
-          <p className="mt-3 text-gray-600">Powerful modules designed for Administrators, Teachers, Finance teams, Students, and Parents.</p>
-        </div>
-        <div className="mt-10 grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[
-            {
-              title: 'Role‑based Dashboards',
-              desc: 'Tailored experiences for Admin, Teacher, Student, and Finance roles.'
-            },
-            {
-              title: 'Academics & Timetable',
-              desc: 'Manage classes, subjects, calendars, and detailed time‑tables.'
-            },
-            {
-              title: 'Exams, Grades & Results',
-              desc: 'Enter, analyze and share results with rich analytics.'
-            },
-            {
-              title: 'Messaging & Notifications',
-              desc: 'In‑app messages and real‑time notifications keep everyone aligned.'
-            },
-            {
-              title: 'Finance Suite',
-              desc: 'Invoices, payments, fee categories, class fees, expenses, and reports.'
-            },
-            {
-              title: 'Student Wallet & Pocket Money',
-              desc: 'Track deposits, spending and balances with transparency.'
-            },
-            {
-              title: 'Reports & Analytics',
-              desc: 'Operational and academic insights for data‑driven decisions.'
-            },
-            {
-              title: 'Secure & Private',
-              desc: 'Role‑based access, audit trails and modern security best practices.'
-            },
-            {
-              title: 'Scalable Architecture',
-              desc: 'Built with React and Django for reliability and speed.'
-            }
-          ].map((f) => (
-            <div key={f.title} className="rounded-xl border border-gray-200 p-6 hover:shadow-md transition">
-              <div className="h-10 w-10 rounded-lg bg-indigo-600/10 text-indigo-700 grid place-items-center mb-4">★</div>
-              <h3 className="font-semibold text-gray-900">{f.title}</h3>
-              <p className="mt-2 text-sm text-gray-600">{f.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
+      <LazySection>
+        <section id="features" className="mx-auto max-w-7xl px-6 py-16">
+          <div className="text-center max-w-3xl mx-auto">
+            <h2 className="text-3xl font-bold text-gray-900">Everything you need to manage a modern school</h2>
+            <p className="mt-3 text-gray-600">Powerful modules designed for Administrators, Teachers, Finance teams, Students, and Parents.</p>
+          </div>
+          <div className="mt-10 grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[
+              { title: 'Role‑based Dashboards', desc: 'Tailored experiences for Admin, Teacher, Student, and Finance roles.' },
+              { title: 'Academics & Timetable', desc: 'Manage classes, subjects, calendars, and detailed time‑tables.' },
+              { title: 'Exams, Grades & Results', desc: 'Enter, analyze and share results with rich analytics.' },
+              { title: 'Messaging & Notifications', desc: 'In‑app messages and real‑time notifications keep everyone aligned.' },
+              { title: 'Finance Suite', desc: 'Invoices, payments, fee categories, class fees, expenses, and reports.' },
+              { title: 'Student Wallet & Pocket Money', desc: 'Track deposits, spending and balances with transparency.' },
+              { title: 'Reports & Analytics', desc: 'Operational and academic insights for data‑driven decisions.' },
+              { title: 'Secure & Private', desc: 'Role‑based access, audit trails and modern security best practices.' },
+              { title: 'Scalable Architecture', desc: 'Built with React and Django for reliability and speed.' }
+            ].map((f, idx) => (
+              <div key={f.title} className="rounded-xl border border-gray-200 p-6 hover:shadow-md transition bg-white">
+                <div className={`h-10 w-10 rounded-lg grid place-items-center mb-4 ${palettes[idx % palettes.length].bg} ${palettes[idx % palettes.length].text}`}>★</div>
+                <h3 className="font-semibold text-gray-900">{f.title}</h3>
+                <p className="mt-2 text-sm text-gray-600">{f.desc}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      </LazySection>
 
       {/* Advantages */}
+      <LazySection>
       <section id="advantages" className="bg-gray-50">
         <div className="mx-auto max-w-7xl px-6 py-16">
           <div className="grid lg:grid-cols-2 gap-10 items-center">
@@ -226,50 +276,126 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
+      </LazySection>
 
       {/* Pricing */}
+      <LazySection>
       <section id="pricing" className="mx-auto max-w-7xl px-6 py-16">
         <div className="text-center max-w-3xl mx-auto">
           <h2 className="text-3xl font-bold text-gray-900">Simple, transparent billing</h2>
           <p className="mt-3 text-gray-600">Start small and scale as you grow. No hidden fees. Cancel anytime.</p>
         </div>
-        <div className="mt-10 grid md:grid-cols-3 gap-6">
+        {/* Billing cycle toggle */}
+        <div className="mt-6 flex items-center justify-center">
+          <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 text-sm shadow-sm dark:bg-gray-900 dark:border-gray-800" role="tablist" aria-label="Billing Cycle">
+            <button
+              type="button"
+              onClick={() => setBillingCycle('monthly')}
+              className={`px-3 py-1.5 rounded-md transition ${billingCycle === 'monthly' ? 'bg-indigo-600 text-white shadow' : 'text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-800'}`}
+              aria-pressed={billingCycle === 'monthly'}
+            >
+              Monthly
+            </button>
+            <button
+              type="button"
+              onClick={() => setBillingCycle('annual')}
+              className={`ml-1 px-3 py-1.5 rounded-md transition ${billingCycle === 'annual' ? 'bg-indigo-600 text-white shadow' : 'text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-800'}`}
+              aria-pressed={billingCycle === 'annual'}
+            >
+              Annual <span className="ml-1 text-xs text-indigo-700 bg-indigo-100 rounded px-1 py-0.5 align-middle">2 months free</span>
+            </button>
+          </div>
+        </div>
+        <div className="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
           {[
             {
-              name: 'Starter', price: 'KSh 4,999/mo', highlight: false,
-              features: ['Up to 200 students', 'Core academics & timetable', 'Invoices & payments', 'Email support']
+              slug: 'trial', name: 'Free Trial', trial: true, highlight: false,
+              features: ['Full access for 14 days', 'Up to 100 students', 'No credit card required', 'Cancel anytime']
             },
             {
-              name: 'Pro', price: 'KSh 9,999/mo', highlight: true,
+              slug: 'starter', name: 'Starter', priceMonthly: 4999, highlight: false,
+              features: [
+                'Up to 200 students',
+                'Core academics & timetable',
+                'Invoices & payments (no point-of-sale fee payments)',
+                'In-app messages (email only; no instant SMS)'
+              ]
+            },
+            {
+              slug: 'pro', name: 'Pro', priceMonthly: 9999, highlight: true, ribbon: 'Most popular',
               features: ['Unlimited students', 'Full finance suite', 'Messaging & notifications', 'Advanced reports']
             },
             {
-              name: 'Enterprise', price: 'Custom', highlight: false,
+              slug: 'growth', name: 'Growth', priceMonthly: 14999, highlight: false,
+              features: ['Unlimited students', 'Advanced timetable & calendars', 'Enhanced analytics', 'Priority email support']
+            },
+            {
+              slug: 'enterprise', name: 'Enterprise', custom: true, highlight: false,
               features: ['Multi‑campus', 'Dedicated success manager', 'Priority support', 'Custom integrations']
             }
-          ].map((p) => (
-            <div key={p.name} className={`rounded-2xl border ${p.highlight ? 'border-indigo-600 shadow-xl' : 'border-gray-200'} p-6 bg-white`}>
+          ].map((p) => {
+            const isAnnual = billingCycle === 'annual'
+            const monthly = p.priceMonthly
+            const annualAmount = monthly ? monthly * 10 : null // 2 months free
+            const priceText = p.trial
+              ? 'Free · 14 days'
+              : p.custom
+                ? 'Custom'
+                : isAnnual
+                  ? `KSh ${annualAmount?.toLocaleString()}/yr`
+                  : `KSh ${monthly?.toLocaleString()}/mo`
+            return (
+            <div
+              id={`plan-${p.slug || p.name.toLowerCase()}`}
+              key={p.name}
+              className={`relative rounded-2xl border p-6 bg-white hover:shadow-lg transition duration-200 flex flex-col dark:bg-gray-900 ${p.highlight ? 'border-indigo-600 shadow-xl ring-1 ring-indigo-100 bg-gradient-to-b from-white to-indigo-50/30 dark:from-gray-900 dark:to-indigo-950/20 hover:-translate-y-1 hover:scale-[1.01]' : 'border-gray-200 dark:border-gray-800'}`}
+            >
+              {/* Ribbon */}
+              {(p.ribbon || p.highlight) && (
+                <span className="pointer-events-none absolute -right-10 top-6 rotate-45 bg-indigo-600 text-white text-xs font-semibold px-10 py-1 shadow-sm">{p.ribbon || 'Recommended'}</span>
+              )}
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-gray-900">{p.name}</h3>
-                {p.highlight && <span className="text-xs font-semibold text-indigo-700 bg-indigo-100 px-2 py-1 rounded-full">Most popular</span>}
+                {p.highlight && <span className="text-xs font-semibold text-indigo-700 bg-indigo-100 px-2 py-1 rounded-full">{p.ribbon || 'Most popular'}</span>}
               </div>
-              <div className="mt-4 text-3xl font-extrabold text-gray-900">{p.price}</div>
-              <ul className="mt-6 space-y-2 text-sm text-gray-700">
-                {p.features.map((f) => (
-                  <li key={f} className="flex gap-2"><span className="text-green-600">✓</span><span>{f}</span></li>
-                ))}
+              <div className="mt-4 text-3xl font-extrabold text-gray-900 tracking-tight">
+                <span className="inline-block transition-all duration-300 will-change-transform" key={priceText}>{priceText}</span>
+              </div>
+              {(!p.trial && !p.custom && isAnnual) && (
+                <div className="mt-1 text-xs text-indigo-700">Billed annually · 2 months free</div>
+              )}
+              <ul className="mt-6 space-y-2 text-sm text-gray-700 flex-1 dark:text-gray-300">
+                {p.features.map((f) => {
+                  const tooltip = f.includes('no point-of-sale') ? 'POS fee payments are not available on Starter' : (f.includes('no instant SMS') ? 'Starter does not include instant SMS delivery' : '')
+                  return (
+                    <li key={f} className="flex gap-2" title={tooltip}>
+                      <Check />
+                      <span>{f}</span>
+                    </li>
+                  )
+                })}
               </ul>
-              <div className="mt-6">
-                <a href="mailto:EduTrack46@gmail.com?subject=EduTrack%20Pricing%20-%20{p.name}" className={`w-full inline-flex justify-center px-4 py-2 rounded-lg font-medium ${p.highlight ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'border border-gray-300 text-gray-700 hover:bg-gray-50'}`}>
-                  Talk to Sales
-                </a>
-              </div>
+              {p.trial ? (
+                <div className="mt-6">
+                  <Link to="/trial" className="w-full inline-flex justify-center items-center h-10 px-4 rounded-lg font-medium bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm">
+                    Start Free Trial
+                  </Link>
+                </div>
+              ) : (
+                <div className="mt-6">
+                  <a href={`mailto:EduTrack46@gmail.com?subject=EduTrack%20Pricing%20-%20${p.name}`} className={`w-full inline-flex justify-center items-center h-10 px-4 rounded-lg font-medium ${p.highlight ? 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm' : 'border border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800'}`}>
+                    Talk to Sales
+                  </a>
+                </div>
+              )}
             </div>
-          ))}
+          )})}
         </div>
       </section>
+      </LazySection>
 
       {/* Contact */}
+      <LazySection>
       <section id="contact" className="bg-gray-50">
         <div className="mx-auto max-w-7xl px-6 py-16">
           <div className="grid md:grid-cols-2 gap-10 items-start">
@@ -301,6 +427,7 @@ export default function LandingPage() {
           </div>
         </div>
       </section>
+      </LazySection>
 
       {/* Footer */}
       <footer className="border-t border-gray-100">

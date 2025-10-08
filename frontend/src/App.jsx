@@ -6,6 +6,7 @@ import NotificationContainer from './components/NotificationContainer'
 import MessageNotifier from './components/MessageNotifier'
 import LoginPage from './pages/LoginPage'
 import LandingPage from './pages/LandingPage'
+import TrialOnboarding from './pages/TrialOnboarding'
 import AdminDashboard from './pages/AdminDashboard'
 import TeacherDashboard from './pages/TeacherDashboard'
 import TeacherClasses from './pages/TeacherClasses'
@@ -87,6 +88,7 @@ export default function App() {
           {/* Public landing page */}
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/trial" element={<TrialOnboarding />} />
           <Route path="/app" element={<RoleRedirect />} />
           <Route path="/admin" element={<ProtectedRoute roles={["admin"]}><AdminDashboard/></ProtectedRoute>} />
           <Route path="/admin/students" element={<ProtectedRoute roles={["admin"]}><AdminStudents/></ProtectedRoute>} />
