@@ -3,14 +3,13 @@ services:
     name: edutrack-backend
     env: python
     rootDir: backend
-    buildCommand: |
-      pip install -r requirements.txt
-      python manage.py collectstatic --noinput
-      python manage.py migrate
+    buildCommand: pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate
     startCommand: gunicorn edutrack.wsgi:application
     plan: starter
     autoDeploy: true
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
       - key: DEBUG
         value: "False"
       - key: USE_SQLITE
@@ -32,7 +31,7 @@ services:
       - key: TIME_ZONE
         value: Africa/Nairobi
       - key: USE_S3
-        value: "True"
+        value: "False"
       # S3/Spaces credentials (fill with your values)
       - key: AWS_ACCESS_KEY_ID
       - key: AWS_SECRET_ACCESS_KEY
