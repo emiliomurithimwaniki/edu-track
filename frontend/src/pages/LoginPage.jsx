@@ -162,7 +162,7 @@ export default function LoginPage() {
       {/* Header */}
       <header className="hidden sm:flex relative z-10 items-center justify-between px-6 md:px-10 py-5 text-white">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-white/10 grid place-items-center font-extrabold">ET</div>
+          <img src="/logo.jpg" alt="EDU-TRACK Logo" className="w-9 h-9 rounded-lg object-contain bg-white/10 p-1" />
           <a href="/" className="hidden sm:block text-sm hover:underline">Home</a>
         </div>
         <div className="text-center font-semibold tracking-widest">EDU-TRACK</div>
@@ -172,7 +172,7 @@ export default function LoginPage() {
       {/* Mobile header */}
       <div className="sm:hidden relative z-10 flex items-center justify-between px-4 py-4 text-white">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-md border border-white/70" />
+          <img src="/logo.jpg" alt="EDU-TRACK Logo" className="w-8 h-8 rounded-md object-contain bg-white/10 p-1" />
           <div className="text-xs font-semibold tracking-wider">EDU-TRACK</div>
         </div>
         <a href="#" className="text-xs underline">Contact</a>
@@ -203,7 +203,7 @@ export default function LoginPage() {
               <div className={`relative bg-white/85 backdrop-blur-md rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.35)] ring-1 ring-white/60 p-6 md:p-8 transition-all duration-500 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}>
                 <div className="flex items-center justify-between">
                   <div className="inline-flex items-center gap-2">
-                    <span className="h-7 w-7 rounded-md bg-gradient-to-br from-indigo-600 to-purple-600 text-white grid place-items-center text-[11px] font-extrabold">ET</span>
+                    <img src="/logo.jpg" alt="EduTrack Logo" className="h-7 w-7 rounded-md object-contain" />
                     <span className="sr-only">EduTrack</span>
                   </div>
                   <h2 className="text-xl font-bold text-gray-900">{formStep === 'role' ? 'Select your role' : 'Log in'}</h2>

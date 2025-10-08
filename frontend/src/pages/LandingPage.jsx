@@ -11,7 +11,7 @@ export default function LandingPage() {
       <header className="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-gray-100">
         <div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-lg bg-indigo-600 text-white grid place-items-center font-bold">ET</div>
+            <img src="/logo.jpg" alt="EduTrack Logo" className="h-9 w-9 rounded-lg object-contain" />
             <span className="text-xl font-semibold tracking-tight">EduTrack</span>
           </div>
           <nav className="hidden md:flex items-center gap-8 text-sm text-gray-600">

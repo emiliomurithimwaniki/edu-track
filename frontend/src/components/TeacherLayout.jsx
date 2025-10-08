@@ -198,7 +198,10 @@ export default function TeacherLayout({ children }){
             </svg>
           </button>
         </div>
-        <div className="font-bold tracking-wide text-base md:text-lg">EDU-TRACK</div>
+        <div className="flex items-center gap-2">
+          <img src="/logo.jpg" alt="EDU-TRACK Logo" className="h-6 w-6 md:h-7 md:w-7 rounded object-contain" />
+          <div className="font-bold tracking-wide text-base md:text-lg">EDU-TRACK</div>
+        </div>
         <div className="flex-1 flex items-center justify-center gap-2 text-xs md:text-sm px-1 md:px-2 text-gray-700 truncate">
           {schoolLogo ? (
             <img src={schoolLogo} alt="School logo" className="h-5 w-5 md:h-6 md:w-6 object-contain rounded" />

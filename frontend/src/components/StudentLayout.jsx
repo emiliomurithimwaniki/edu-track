@@ -88,7 +88,7 @@ export default function StudentLayout({ children }){
         <aside className={`fixed z-40 top-0 left-0 bottom-0 bg-slate-800 border-r border-slate-700/30 transition-all duration-200 ${sidebarBase} hidden md:flex flex-col`}>
           {/* Brand */}
           <div className="h-14 flex items-center gap-2 px-3 border-b border-slate-700/40 text-slate-100">
-            <div className="w-7 h-7 bg-blue-600 rounded flex items-center justify-center font-bold">ET</div>
+            <img src="/logo.jpg" alt="EDU-TRACK Logo" className="w-7 h-7 rounded object-contain" />
             {isOpen && (
               <div className="truncate">
                 <div className="font-semibold">EDU-TRACK</div>
@@ -134,7 +134,7 @@ export default function StudentLayout({ children }){
         {/* Mobile Drawer */}
         <aside className={`fixed z-40 top-0 left-0 bottom-0 bg-slate-800 border-r border-slate-700/30 w-[85%] max-w-xs p-2 md:hidden transition-transform duration-200 shadow-2xl ${isMobileOpen? 'translate-x-0':'-translate-x-full'}`}>
           <div className="h-14 flex items-center gap-2 px-2 border-b border-slate-700/40 text-slate-100">
-            <div className="w-7 h-7 bg-blue-600 rounded flex items-center justify-center font-bold">ET</div>
+            <img src="/logo.jpg" alt="EDU-TRACK Logo" className="w-7 h-7 rounded object-contain bg-white/10 p-0.5" />
             <div className="truncate">
               <div className="font-semibold">EDU-TRACK</div>
               <div className="text-[10px] opacity-80 truncate">{schoolName || ''}</div>

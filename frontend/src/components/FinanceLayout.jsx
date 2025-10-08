@@ -85,7 +85,10 @@ export default function FinanceLayout({ children }) {
                 <button className="p-2.5 rounded-lg hover:bg-gray-100/80 transition-all duration-200 hidden md:inline-flex" aria-label="Collapse sidebar" onClick={() => setIsOpen(v => !v)}>
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-gray-600"><path fillRule="evenodd" d="M19.5 3.75a.75.75 0 01.75.75v14.25a.75.75 0 01-.75.75H4.5a.75.75 0 01-.75-.75V4.5a.75.75 0 01.75-.75h15zm-9.53 3.22a.75.75 0 10-1.06 1.06l2.72 2.72-2.72 2.72a.75.75 0 101.06 1.06l3.25-3.25a.75.75 0 000-1.06l-3.25-3.25z" clipRule="evenodd" /></svg>
                 </button>
-                <div className="font-bold text-xl text-gray-900 tracking-tight">EDU-TRACK Finance</div>
+                <div className="flex items-center gap-2">
+                    <img src="/logo.jpg" alt="EDU-TRACK Logo" className="w-8 h-8 rounded object-contain" />
+                    <div className="font-bold text-xl text-gray-900 tracking-tight">EDU-TRACK Finance</div>
+                </div>
                 <div className="flex-1"></div>
                 <button onClick={logout} className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-all duration-200 shadow-soft">Logout</button>
             </header>

@@ -149,9 +149,7 @@ export default function AdminLayout({ children }){
           </button>
         </div>
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 bg-gradient-to-br from-brand-500 to-brand-600 rounded-lg flex items-center justify-center">
-            <span className="text-white font-bold text-sm">ET</span>
-          </div>
+          <img src="/logo.jpg" alt="EDU-TRACK Logo" className="w-8 h-8 rounded-lg object-contain" />
           <div className="font-bold text-xl text-gray-900 tracking-tight">EDU-TRACK</div>
         </div>
         <div className="flex-1 flex items-center justify-center gap-3 text-sm px-2 md:px-4">
