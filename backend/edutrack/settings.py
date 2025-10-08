@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
+import dj_database_url
 
 # Ensure .env takes precedence over any pre-set OS environment variables
 load_dotenv(override=True)
@@ -132,6 +133,11 @@ else:
             'OPTIONS': {'sslmode': 'require'},
         }
     }
+
+# Prefer DATABASE_URL if provided (Render / 12-factor style)
+DATABASE_URL = os.getenv('DATABASE_URL')
+if DATABASE_URL:
+    DATABASES['default'] = dj_database_url.parse(DATABASE_URL, conn_max_age=600, ssl_require=True)
 
 AUTH_USER_MODEL = 'accounts.User'
 

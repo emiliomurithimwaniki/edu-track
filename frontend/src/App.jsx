@@ -5,6 +5,7 @@ import { NotificationProvider } from './components/NotificationContext'
 import NotificationContainer from './components/NotificationContainer'
 import MessageNotifier from './components/MessageNotifier'
 import LoginPage from './pages/LoginPage'
+import LandingPage from './pages/LandingPage'
 import AdminDashboard from './pages/AdminDashboard'
 import TeacherDashboard from './pages/TeacherDashboard'
 import TeacherClasses from './pages/TeacherClasses'
@@ -83,9 +84,10 @@ export default function App() {
       <AuthProvider>
         <MessageNotifier />
         <Routes>
-          {/* Default to Admin dashboard */}
-          <Route path="/" element={<Navigate to="/admin" />} />
+          {/* Public landing page */}
+          <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/app" element={<RoleRedirect />} />
           <Route path="/admin" element={<ProtectedRoute roles={["admin"]}><AdminDashboard/></ProtectedRoute>} />
           <Route path="/admin/students" element={<ProtectedRoute roles={["admin"]}><AdminStudents/></ProtectedRoute>} />
           <Route path="/admin/students/:id" element={<ProtectedRoute roles={["admin"]}><AdminStudentDashboard/></ProtectedRoute>} />
