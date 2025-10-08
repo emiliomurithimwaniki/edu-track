@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../api';
 
@@ -9,6 +9,7 @@ export default function FinancePocketMoney() {
     const [transactions, setTransactions] = useState([]);
     const [totalCount, setTotalCount] = useState(0);
     const [loading, setLoading] = useState(true);
+    const [tableLoading, setTableLoading] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [selectedWallet, setSelectedWallet] = useState(null);
     const [transactionType, setTransactionType] = useState('deposit');
@@ -26,17 +27,16 @@ export default function FinancePocketMoney() {
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(20);
 
+    // Search modal state (navigate to a student's wallet)
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [searchQueryGlobal, setSearchQueryGlobal] = useState('');
+
     // Wallet modal state
     const [walletModalOpen, setWalletModalOpen] = useState(false);
     const [walletModalWallet, setWalletModalWallet] = useState(null);
     const [walletModalStudent, setWalletModalStudent] = useState(null);
     const [walletModalTx, setWalletModalTx] = useState([]);
     const [walletModalLoading, setWalletModalLoading] = useState(false);
-
-    // Search modal state
-    const [searchOpen, setSearchOpen] = useState(false);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [searchLoading, setSearchLoading] = useState(false);
 
     useEffect(() => {
         (async () => {
@@ -46,11 +46,10 @@ export default function FinancePocketMoney() {
                     api.get('/academics/students/?page_size=10000'),
                 ]);
                 setWallets(walletRes.data);
-                // Support both paginated and non-paginated responses
                 const studentsPayload = Array.isArray(studentRes.data) ? studentRes.data : (studentRes.data?.results || []);
                 setStudents(studentsPayload);
-                // Initial transactions load
-                await fetchTransactions(1, pageSize, filterStudentId, filterType, dateFrom, dateTo, walletRes.data, studentsPayload);
+                // Kick off transactions fetch but don't block first paint
+                fetchTransactions(1, pageSize, filterStudentId, filterType, dateFrom, dateTo, walletRes.data, studentsPayload);
             } catch (e) {
                 console.error("Failed to load data:", e);
             } finally {
@@ -60,9 +59,14 @@ export default function FinancePocketMoney() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // When filters or pagination change, reload transactions
+    // When filters or pagination change, reload transactions (debounced)
+    const debounceRef = useRef(null);
     useEffect(() => {
-        fetchTransactions(page, pageSize, filterStudentId, filterType, dateFrom, dateTo);
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => {
+            fetchTransactions(page, pageSize, filterStudentId, filterType, dateFrom, dateTo);
+        }, 250);
+        return () => debounceRef.current && clearTimeout(debounceRef.current);
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [page, pageSize, filterStudentId, filterType, dateFrom, dateTo]);
 
@@ -157,21 +161,43 @@ export default function FinancePocketMoney() {
         });
     };
 
+    const fetchAbortRef = useRef(null);
     const fetchTransactions = async (p = 1, ps = 20, studentId = '', type = '', from = '', to = '', ws = null, sts = null) => {
         try {
+            // cancel in-flight
+            if (fetchAbortRef.current) {
+                try { fetchAbortRef.current.abort(); } catch (_) {}
+            }
+            const controller = new AbortController();
+            fetchAbortRef.current = controller;
+            setTableLoading(true);
             const query = buildTxQuery(p, ps, studentId, type);
-            const res = await api.get(`/finance/pocket-money-transactions/?${query}`);
+            const res = await api.get(`/finance/pocket-money-transactions/?${query}`, { signal: controller.signal });
             const payload = Array.isArray(res.data) ? res.data : (res.data?.results || []);
-            // DRF count for pagination if present
             setTotalCount(typeof res.data?.count === 'number' ? res.data.count : payload.length);
-            // Sort newest first (client fallback)
             payload.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
             const filtered = applyClientDateFilter(payload);
             setTransactions(filtered);
         } catch (e) {
-            console.error('Failed to fetch transactions:', e);
+            if (e?.name !== 'CanceledError' && e?.name !== 'AbortError') {
+                console.error('Failed to fetch transactions:', e);
+            }
+        } finally {
+            setTableLoading(false);
         }
     };
+
+    // O(1) lookups for rendering
+    const studentById = useMemo(() => {
+        const map = new Map();
+        for (const s of students) map.set(s.id, s);
+        return map;
+    }, [students]);
+    const walletById = useMemo(() => {
+        const map = new Map();
+        for (const w of wallets) map.set(w.id, w);
+        return map;
+    }, [wallets]);
 
     const handleInputChange = (e) => {
         const { name, value } = e.target;
@@ -272,27 +298,52 @@ export default function FinancePocketMoney() {
                 <button onClick={() => openTransactionForm(null, 'withdrawal')} className="px-4 py-2 rounded-lg text-sm font-medium bg-rose-600 text-white hover:bg-rose-700">
                     Withdraw
                 </button>
-                <div className="flex-1" />
-                <button
-                    type="button"
-                    onClick={async () => {
-                        setSearchOpen(true);
-                        // If students not loaded yet, fetch
-                        if (!students || students.length === 0) {
-                            try {
-                                setSearchLoading(true);
-                                const res = await api.get('/academics/students/?page_size=10000');
-                                const payload = Array.isArray(res.data) ? res.data : (res.data?.results || []);
-                                setStudents(payload);
-                            } catch (e) { console.error('Failed to load students', e); }
-                            finally { setSearchLoading(false); }
-                        }
-                    }}
-                    className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700"
-                >
-                    Search Student
-                </button>
             </div>
+            {/* Global Search modal */}
+            {searchOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center">
+                    <div className="absolute inset-0 bg-black/40" onClick={() => setSearchOpen(false)}></div>
+                    <div className="relative bg-white w-full max-w-xl mx-4 rounded-2xl shadow-card border border-gray-200 p-6">
+                        <div className="flex items-start justify-between gap-4 mb-4">
+                            <h3 className="text-lg font-semibold text-gray-900">Find Student</h3>
+                            <button onClick={() => setSearchOpen(false)} className="text-gray-500 hover:text-gray-700">✕</button>
+                        </div>
+                        <input
+                            type="text"
+                            placeholder="Search by Admission No. or Name"
+                            value={searchQueryGlobal}
+                            onChange={(e)=> setSearchQueryGlobal(e.target.value)}
+                            className="w-full border border-gray-300 rounded-md py-2 px-3 text-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
+                        />
+                        <div className="mt-3 max-h-80 overflow-auto border border-gray-200 rounded-md divide-y">
+                            {students
+                                .filter(s => {
+                                    const q = searchQueryGlobal.trim().toLowerCase();
+                                    if (!q) return true;
+                                    return (
+                                        (s.admission_no || '').toLowerCase().includes(q) ||
+                                        (s.name || '').toLowerCase().includes(q)
+                                    );
+                                })
+                                .slice(0, 200)
+                                .map(s => (
+                                    <button
+                                        key={s.id}
+                                        type="button"
+                                        onClick={() => { setSearchOpen(false); navigate(`/finance/pocket-money/wallet/${s.id}`); }}
+                                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                                    >
+                                        <div className="font-medium text-gray-900">{s.admission_no} - {s.name}</div>
+                                        <div className="text-xs text-gray-500">Class: {s?.klass_detail?.name || '—'}</div>
+                                    </button>
+                                ))}
+                            {students.length === 0 && (
+                                <div className="p-3 text-sm text-gray-500">No students loaded.</div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {showForm && (
                 <div className="bg-white rounded-2xl shadow-card border border-gray-200 p-6">
@@ -418,9 +469,21 @@ export default function FinancePocketMoney() {
                             </tr>
                         </thead>
                         <tbody>
+                            {tableLoading && (
+                                Array.from({ length: Math.min(pageSize, 10) }).map((_, i) => (
+                                    <tr key={`skeleton-${i}`} className="border-b animate-pulse">
+                                        <td className="px-6 py-4"><div className="h-4 bg-gray-100 rounded w-40"/></td>
+                                        <td className="px-6 py-4"><div className="h-4 bg-gray-100 rounded w-56"/></td>
+                                        <td className="px-6 py-4"><div className="h-4 bg-gray-100 rounded w-24"/></td>
+                                        <td className="px-6 py-4"><div className="h-4 bg-gray-100 rounded w-20"/></td>
+                                        <td className="px-6 py-4"><div className="h-4 bg-gray-100 rounded w-56"/></td>
+                                        <td className="px-6 py-4"><div className="h-4 bg-gray-100 rounded w-24"/></td>
+                                    </tr>
+                                ))
+                            )}
                             {transactions.map(tx => {
-                                const wallet = wallets.find(w => w.id === tx.wallet);
-                                const s = wallet ? students.find(st => st.id === wallet.student) : null;
+                                const wallet = walletById.get(tx.wallet);
+                                const s = wallet ? studentById.get(wallet.student) : null;
                                 return (
                                     <tr key={tx.id} className="bg-white border-b">
                                         <td className="px-6 py-4 whitespace-nowrap">{new Date(tx.created_at).toLocaleString()}</td>
@@ -465,16 +528,15 @@ export default function FinancePocketMoney() {
                 </div>
             </div>
             {/* Wallet modal */}
-            {walletModalOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center" onKeyDown={(e)=>{ if (e.key === 'Escape') closeWalletModal(); }} tabIndex={-1} aria-modal="true" role="dialog">
+            {walletModalOpen && walletModalWallet && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center">
+                    <div className="absolute inset-0 bg-black/40" onClick={closeWalletModal}></div>
                     <div className="relative bg-white w-full max-w-2xl mx-4 rounded-2xl shadow-card border border-gray-200 p-6">
                         <div className="flex items-start justify-between gap-4 mb-4">
                             <div>
                                 <h3 className="text-xl font-semibold text-gray-900">Wallet Details</h3>
                                 <p className="text-sm text-gray-600">{walletModalStudent ? `${walletModalStudent.name} (${walletModalStudent.admission_no})` : ''}</p>
-{{ ... }}
-            {searchOpen && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center" onKeyDown={(e)=>{ if (e.key === 'Escape') setSearchOpen(false); }} tabIndex={-1} aria-modal="true" role="dialog">
+                            </div>
                             <button onClick={closeWalletModal} className="text-gray-500 hover:text-gray-700">✕</button>
                         </div>
                         <div className="flex items-center justify-between mb-4">
@@ -519,3 +581,5 @@ export default function FinancePocketMoney() {
         </div>
     );
 }
+
+ 
