@@ -1,10 +1,45 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
+
+// Lazy load wrapper using IntersectionObserver
+function LazySection({ children, rootMargin = '0px 0px -10% 0px' }) {
+  const [visible, setVisible] = useState(false)
+  const ref = useRef(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setVisible(true)
+        io.disconnect()
+      }
+    }, { rootMargin })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [rootMargin])
+  return (
+    <div ref={ref} className={`transition-all duration-700 ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
+      {children}
+    </div>
+  )
+}
 
 export default function LandingPage() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const whatsappNumber = '+254796031071'
   const whatsappLink = `https://wa.me/${whatsappNumber.replace('+', '')}`
+  // Color palettes for feature cards
+  const palettes = [
+    { bg: 'bg-indigo-600/10', text: 'text-indigo-700' },
+    { bg: 'bg-emerald-600/10', text: 'text-emerald-700' },
+    { bg: 'bg-rose-600/10', text: 'text-rose-700' },
+    { bg: 'bg-amber-500/10', text: 'text-amber-700' },
+    { bg: 'bg-sky-600/10', text: 'text-sky-700' },
+    { bg: 'bg-violet-600/10', text: 'text-violet-700' },
+    { bg: 'bg-fuchsia-600/10', text: 'text-fuchsia-700' },
+    { bg: 'bg-lime-600/10', text: 'text-lime-700' },
+    { bg: 'bg-teal-600/10', text: 'text-teal-700' },
+  ]
   return (
     <div className="min-h-screen bg-white text-gray-800">
       {/* Header */}
@@ -89,12 +124,17 @@ export default function LandingPage() {
                 <img
                   src={new URL('../../images/pexels-kwakugriffn-14554003.jpg', import.meta.url).href}
                   alt="EduTrack preview"
+                  width="1280"
+                  height="640"
+                  fetchPriority="high"
+                  decoding="async"
+                  loading="eager"
                   className="w-full h-80 object-cover"
                 />
                 <div className="grid grid-cols-3 divide-x divide-gray-100">
-                  <img loading="lazy" src={new URL('../../images/pexels-gabby-k-6289065.jpg', import.meta.url).href} alt="Students" className="h-28 w-full object-cover"/>
-                  <img loading="lazy" src={new URL('../../images/pexels-akelaphotography-448877.jpg', import.meta.url).href} alt="Campus" className="h-28 w-full object-cover"/>
-                  <img loading="lazy" src={new URL('../../images/pexels-kwakugriffn-14554003.jpg', import.meta.url).href} alt="Education" className="h-28 w-full object-cover"/>
+                  <img loading="lazy" decoding="async" width="400" height="160" src={new URL('../../images/pexels-gabby-k-6289065.jpg', import.meta.url).href} alt="Students" className="h-28 w-full object-cover"/>
+                  <img loading="lazy" decoding="async" width="400" height="160" src={new URL('../../images/pexels-akelaphotography-448877.jpg', import.meta.url).href} alt="Campus" className="h-28 w-full object-cover"/>
+                  <img loading="lazy" decoding="async" width="400" height="160" src={new URL('../../images/pexels-kwakugriffn-14554003.jpg', import.meta.url).href} alt="Education" className="h-28 w-full object-cover"/>
                 </div>
               </div>
             </div>

@@ -571,7 +571,8 @@ export default function AdminTimetable() {
         let planObj = currentPlan
         try{ const res = await api.get(`/academics/timetable/plans/${currentPlan.id}/`); planObj = res.data || currentPlan }catch{}
         const fromServer = planObj?.block_assignments && typeof planObj.block_assignments === 'object' ? planObj.block_assignments : null
-        if(fromServer){
+        // Only trust server if it has at least one assignment; otherwise keep local
+        if(fromServer && Object.keys(fromServer).length > 0){
           setBlockAssignments(fromServer)
           try{ localStorage.setItem(key, JSON.stringify(fromServer)) }catch{}
           return
