@@ -18,7 +18,7 @@ services:
         generateValue: true
       - key: ALLOWED_HOSTS
         # After first deploy, set this to your Render service domain and any custom domains
-        value: edutrack-backend.onrender.com,localhost,127.0.0.1
+        value: edu-track-7f7p.onrender.com,edutrack-backend.onrender.com,localhost,127.0.0.1
       - key: CSRF_TRUSTED_ORIGINS
         # Include backend + frontend domains (https). Update after setting domains.
         value: https://edutrack-backend.onrender.com,https://edutrack-frontend.netlify.app
