@@ -11,7 +11,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret-key-change-me')
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,edu-track-15m3.onrender.com').split(',')
 CSRF_TRUSTED_ORIGINS = [h if h.startswith('http') else f"http://{h}" for h in os.getenv('CSRF_TRUSTED_ORIGINS', 'http://localhost').split(',')]
 
 # Add ngrok domain for temporary public exposure
@@ -95,11 +95,11 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': os.getenv('POSTGRES_DB', 'edutrack'),
-            'USER': os.getenv('POSTGRES_USER', 'edutrack'),
-            'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'password'),
-            'HOST': os.getenv('POSTGRES_HOST', 'localhost'),
-            'PORT': os.getenv('POSTGRES_PORT', '5432'),
+            'NAME': 'db_sqlite_vlqp',
+            'USER': 'db_sqlite_vlqp_user',
+            'PASSWORD': 'ugcfHwgU2vfxy41xXF2zhneR2XkEDZkI',
+            'HOST': 'dpg-d3imnjnfte5s7393kfc0-a.oregon-postgres.render.com',
+            'PORT': '5432',
         }
     }
 
@@ -161,7 +161,7 @@ if USE_S3:
     }
 
 CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'True') == 'True'
-CORS_ALLOWED_ORIGINS = [o for o in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',') if o]
+CORS_ALLOWED_ORIGINS = [o for o in os.getenv('CORS_ALLOWED_ORIGINS', 'https://edu-track-15m3.onrender.com').split(',') if o]
 
 # Ensure ngrok origin is allowed for CORS when not fully open
 if not CORS_ALLOW_ALL_ORIGINS:
