@@ -95,11 +95,12 @@ else:
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
-            'NAME': 'db_sqlite_vlqp',
-            'USER': 'db_sqlite_vlqp_user',
-            'PASSWORD': 'ugcfHwgU2vfxy41xXF2zhneR2XkEDZkI',
-            'HOST': 'dpg-d3imnjnfte5s7393kfc0-a.oregon-postgres.render.com',
-            'PORT': '5432',
+            'NAME': os.getenv('POSTGRES_DB', ''),
+            'USER': os.getenv('POSTGRES_USER', ''),
+            'PASSWORD': os.getenv('POSTGRES_PASSWORD', ''),
+            'HOST': os.getenv('POSTGRES_HOST', ''),
+            'PORT': os.getenv('POSTGRES_PORT', '5432'),
+            'OPTIONS': {'sslmode': 'require'},
         }
     }
 
