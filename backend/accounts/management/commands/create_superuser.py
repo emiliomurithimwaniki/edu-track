@@ -19,8 +19,7 @@ class Command(BaseCommand):
             ))
             return
 
-        if User.objects.filter(username=username).exists():
-            self.stdout.write(self.style.SUCCESS(f'Superuser "{username}" already exists.'))
-        else:
-            User.objects.create_superuser(username=username, email=email, password=password)
-            self.stdout.write(self.style.SUCCESS(f'Successfully created superuser "{username}"'))
+        # Attempt to delete the user first, in case it exists but is broken
+        User.objects.filter(username=username).delete()
+        User.objects.create_superuser(username=username, email=email, password=password)
+        self.stdout.write(self.style.SUCCESS(f'Successfully created/updated superuser "{username}"'))
