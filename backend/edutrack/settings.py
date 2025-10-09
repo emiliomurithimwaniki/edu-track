@@ -11,8 +11,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret-key-change-me')
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,edu-track-15m3.onrender.com').split(',')
-CSRF_TRUSTED_ORIGINS = [h if h.startswith('http') else f"http://{h}" for h in os.getenv('CSRF_TRUSTED_ORIGINS', 'http://localhost').split(',')]
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+CSRF_TRUSTED_ORIGINS = [h for h in os.getenv('CSRF_TRUSTED_ORIGINS', 'http://localhost').split(',') if h]
 
 # Add ngrok domain for temporary public exposure
 NGROK_HOST = "c714cb9ba36c.ngrok-free.app"
@@ -161,7 +161,7 @@ if USE_S3:
     }
 
 CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'True') == 'True'
-CORS_ALLOWED_ORIGINS = [o for o in os.getenv('CORS_ALLOWED_ORIGINS', 'https://edu-track-15m3.onrender.com').split(',') if o]
+CORS_ALLOWED_ORIGINS = [o for o in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',') if o]
 
 # Ensure ngrok origin is allowed for CORS when not fully open
 if not CORS_ALLOW_ALL_ORIGINS:
