@@ -21,13 +21,16 @@ export default function AdminStudents(){
   const [filterGender, setFilterGender] = useState('')
   const [isLoading, setIsLoading] = useState(false)
 
+  // Tab: active vs graduated
+  const [tab, setTab] = useState('active') // 'active' | 'graduated'
+
   const { showSuccess, showError } = useNotification()
 
   const load = async () => {
     try {
       setIsLoading(true)
       const [st, cl] = await Promise.all([
-        api.get('/academics/students/'),
+        api.get(`/academics/students/?is_graduated=${tab === 'graduated' ? 'true' : 'false'}`),
         api.get('/academics/classes/')
       ])
       setStudents(st.data)
@@ -52,7 +55,7 @@ export default function AdminStudents(){
   useEffect(()=>{ 
     load()
     loadSchoolName()
-  },[])
+  },[tab])
 
   const create = async (e) => {
     e.preventDefault()
@@ -330,9 +333,22 @@ export default function AdminStudents(){
           </div>
         </div>
 
+        {/* Tabs */}
+        <div className="flex items-center gap-2">
+          <button
+            className={`px-3 py-1.5 rounded border text-sm ${tab==='active'?'bg-blue-600 text-white border-blue-600':'bg-white text-gray-700'}`}
+            onClick={()=>{ setTab('active'); setSearchTerm(''); setSearchDraft(''); }}
+          >Active Students</button>
+          <button
+            className={`px-3 py-1.5 rounded border text-sm ${tab==='graduated'?'bg-blue-600 text-white border-blue-600':'bg-white text-gray-700'}`}
+            onClick={()=>{ setTab('graduated'); setSearchTerm(''); setSearchDraft(''); }}
+          >Graduated Students</button>
+        </div>
+
         {/* Filters & Search Toolbar (moved below cards) */}
         <div className="flex items-center gap-3 flex-wrap">
           {/* Filters */}
+          {tab==='active' && (
           <select
             value={filterGrade}
             onChange={(e)=>{ setFilterGrade(e.target.value); setFilterClass('') }}
@@ -343,6 +359,8 @@ export default function AdminStudents(){
               <option key={g} value={g}>Grade {g}</option>
             ))}
           </select>
+          )}
+          {tab==='active' && (
           <select
             value={filterClass}
             onChange={(e)=>setFilterClass(e.target.value)}
@@ -353,6 +371,7 @@ export default function AdminStudents(){
               <option key={c.id} value={c.id}>{c.name} {c.grade_level ? `- ${c.grade_level}` : ''}</option>
             ))}
           </select>
+          )}
           <select
             value={filterGender}
             onChange={(e)=>setFilterGender(e.target.value)}
@@ -395,7 +414,7 @@ export default function AdminStudents(){
           <div className="px-6 py-4 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-indigo-50">
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">All Students</h2>
+                <h2 className="text-xl font-bold text-gray-900">{tab==='active' ? 'Active Students' : 'Graduated Students'}</h2>
                 <p className="text-sm text-gray-600 mt-1">
                   {filteredStudents.length} of {students.length} students
                   {searchTerm && ` matching "${searchTerm}"`}
@@ -403,8 +422,8 @@ export default function AdminStudents(){
               </div>
               <div className="flex items-center gap-2">
                 <div className="flex items-center gap-1 text-sm text-gray-500">
-                  <div className="w-2 h-2 rounded-full bg-green-400"></div>
-                  Active
+                  <div className={`w-2 h-2 rounded-full ${tab==='active'?'bg-green-400':'bg-gray-400'}`}></div>
+                  {tab==='active'?'Active':'Graduated'}
                 </div>
               </div>
             </div>
@@ -475,10 +494,17 @@ export default function AdminStudents(){
                         </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-emerald-100 text-emerald-800 border border-emerald-200">
-                          <div className="w-2 h-2 rounded-full bg-emerald-500 mr-2"></div>
-                          {s.klass_detail?.name || s.klass || 'Not Assigned'}
-                        </span>
+                        {tab==='active' ? (
+                          <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500 mr-2"></div>
+                            {s.klass_detail?.name || s.klass || 'Not Assigned'}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-gray-100 text-gray-800 border border-gray-200">
+                            <div className="w-2 h-2 rounded-full bg-gray-500 mr-2"></div>
+                            Graduated{s.graduation_year ? ` • ${s.graduation_year}` : ''}
+                          </span>
+                        )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <div className="text-sm text-gray-900 font-medium">{s.guardian_id || 'N/A'}</div>

@@ -480,14 +480,20 @@ export default function AdminClassProfile(){
             const { data } = await api.get(`/academics/classes/${id}/`)
             setKlass(data)
             setShowReassignCT(false)
-          }catch(err){ setShowReassignCT(false) }
+          }catch(err){
+            // Surface errors to aid debugging (instead of failing silently)
+            console.error('Failed to reassign class teacher', err?.response || err)
+            const msg = err?.response?.data ? JSON.stringify(err.response.data) : (err?.message || 'Unknown error')
+            try { alert(`Failed to save: ${msg}`) } catch(_) {}
+            setShowReassignCT(false)
+          }
         }} className="grid gap-3">
           <label className="grid gap-1">
             <span className="text-sm text-gray-700">Select Teacher</span>
             <select className="border p-2 rounded" value={reassignTeacher} onChange={e=>setReassignTeacher(e.target.value)} required>
               <option value="">Choose a teacher</option>
               {availableCTs.map(t=> (
-                <option key={t.user?.id || t.id} value={t.user?.id || t.id}>
+                <option key={t.user?.id || `tp-${t.id}`} value={t.user?.id || ''}>
                   {(t.user?.first_name||'') + ' ' + (t.user?.last_name||'') + (t.user?.username ? ` (@${t.user.username})` : '')}
                 </option>
               ))}

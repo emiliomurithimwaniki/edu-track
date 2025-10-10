@@ -1,7 +1,67 @@
-import React from 'react'
-import { Link } from 'react-router-dom'
+import React, { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import api from '../api'
 
 export default function TrialOnboarding() {
+  const navigate = useNavigate()
+  const [form, setForm] = useState({
+    school_name: '',
+    admin_email: '',
+    admin_password: '',
+    admin_first_name: '',
+    admin_last_name: '',
+    phone: ''
+  })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState({})
+  const [honeypot, setHoneypot] = useState('') // should remain empty
+
+  const emailValid = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  const passwordStrength = (pwd) => {
+    if (!pwd) return { score: 0, ok: false }
+    const lengthOK = pwd.length >= 8
+    const upperOK = /[A-Z]/.test(pwd)
+    const numberOK = /\d/.test(pwd)
+    const ok = lengthOK && upperOK && numberOK
+    const score = [lengthOK, upperOK, numberOK].filter(Boolean).length
+    return { score, ok }
+  }
+
+  const onChange = (e) => {
+    const { name, value } = e.target
+    setForm((f) => ({ ...f, [name]: value }))
+  }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError(''); setSuccess(false); setFieldErrors({})
+    if (honeypot) { setError('Invalid submission.'); return }
+    const fe = {}
+    if (!form.school_name) fe.school_name = 'School name is required'
+    if (!form.admin_email) fe.admin_email = 'Email is required'
+    else if (!emailValid(form.admin_email)) fe.admin_email = 'Enter a valid email'
+    if (!form.admin_password) fe.admin_password = 'Password is required'
+    else if (!passwordStrength(form.admin_password).ok) fe.admin_password = 'Min 8 chars, include uppercase and a number'
+    if (Object.keys(fe).length) { setFieldErrors(fe); return }
+    try {
+      setLoading(true)
+      const payload = { ...form, website: honeypot }
+      const { data } = await api.post('/auth/trial-signup/', payload)
+      localStorage.setItem('access', data.access)
+      localStorage.setItem('refresh', data.refresh)
+      setSuccess(true)
+      // small delay to show success state
+      setTimeout(() => navigate('/app'), 600)
+    } catch (err) {
+      const msg = err?.response?.data?.detail || 'Failed to create trial account. Please try again.'
+      setError(msg)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-white">
       <header className="border-b border-gray-100">
@@ -30,15 +90,52 @@ export default function TrialOnboarding() {
             </ul>
           </div>
           <div className="rounded-2xl border border-gray-200 p-6 bg-white">
-            <h2 className="text-lg font-semibold text-gray-900">Get started</h2>
-            <ol className="mt-4 space-y-3 text-sm text-gray-700 list-decimal list-inside">
-              <li>Create your account or sign in</li>
-              <li>Name your school and academic year</li>
-              <li>Import students or use sample data</li>
-            </ol>
-            <div className="mt-6 flex gap-3">
-              <Link to="/login" className="px-4 py-2 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700">Sign in</Link>
-              <a href="mailto:EduTrack46@gmail.com?subject=EduTrack%20Trial%20Assistance" className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 font-medium hover:bg-gray-50">Need help?</a>
+            <h2 className="text-lg font-semibold text-gray-900">Create your trial</h2>
+            {error && (<div className="mt-3 rounded-md bg-rose-50 text-rose-700 text-sm px-3 py-2 border border-rose-200">{error}</div>)}
+            {success && (<div className="mt-3 rounded-md bg-emerald-50 text-emerald-700 text-sm px-3 py-2 border border-emerald-200">Trial created! Redirecting…</div>)}
+            <form className="mt-4 space-y-3" onSubmit={handleSubmit}>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">School name *</label>
+                <input name="school_name" value={form.school_name} onChange={onChange} className={`mt-1 w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${fieldErrors.school_name ? 'border-rose-300 focus:ring-rose-500' : 'border-gray-300 focus:ring-indigo-600'}`} placeholder="e.g., Greenfield Academy" />
+                {fieldErrors.school_name && <div className="mt-1 text-xs text-rose-600">{fieldErrors.school_name}</div>}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">First name</label>
+                  <input name="admin_first_name" value={form.admin_first_name} onChange={onChange} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-600" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Last name</label>
+                  <input name="admin_last_name" value={form.admin_last_name} onChange={onChange} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-600" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Email *</label>
+                <input type="email" name="admin_email" value={form.admin_email} onChange={onChange} className={`mt-1 w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${fieldErrors.admin_email ? 'border-rose-300 focus:ring-rose-500' : 'border-gray-300 focus:ring-indigo-600'}`} placeholder="you@school.com" />
+                {fieldErrors.admin_email && <div className="mt-1 text-xs text-rose-600">{fieldErrors.admin_email}</div>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Password *</label>
+                <input type="password" name="admin_password" value={form.admin_password} onChange={onChange} className={`mt-1 w-full rounded-lg border px-3 py-2 focus:outline-none focus:ring-2 ${fieldErrors.admin_password ? 'border-rose-300 focus:ring-rose-500' : 'border-gray-300 focus:ring-indigo-600'}`} />
+                <div className="mt-1 text-xs text-gray-600">Use at least 8 characters, with an uppercase letter and a number.</div>
+                {fieldErrors.admin_password && <div className="mt-1 text-xs text-rose-600">{fieldErrors.admin_password}</div>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Phone</label>
+                <input name="phone" value={form.phone} onChange={onChange} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-600" />
+              </div>
+              {/* Honeypot field (hidden) */}
+              <div className="hidden">
+                <label>Website</label>
+                <input name="website" value={honeypot} onChange={(e)=>setHoneypot(e.target.value)} />
+              </div>
+              <button type="submit" disabled={loading} className={`w-full inline-flex justify-center items-center h-10 px-4 rounded-lg font-medium text-white ${loading ? 'bg-indigo-400' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
+                {loading ? 'Creating…' : 'Create Trial'}
+              </button>
+            </form>
+            <div className="mt-4 text-sm text-gray-600">Already have an account? <Link className="text-indigo-700 hover:underline" to="/login">Sign in</Link></div>
+            <div className="mt-2">
+              <a href="mailto:EduTrack46@gmail.com?subject=EduTrack%20Trial%20Assistance" className="text-sm text-gray-700 hover:underline">Need help?</a>
             </div>
           </div>
         </div>

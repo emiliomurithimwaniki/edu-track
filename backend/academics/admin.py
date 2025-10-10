@@ -27,8 +27,8 @@ class TeacherProfileAdmin(admin.ModelAdmin):
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
-    list_display = ("id", "admission_no", "name", "klass", "gender", "guardian_id")
-    list_filter = ("gender", "klass__grade_level")
+    list_display = ("id", "admission_no", "name", "klass", "gender", "guardian_id", "is_graduated", "graduation_year")
+    list_filter = ("gender", "klass__grade_level", "is_graduated", "graduation_year")
     search_fields = ("admission_no", "name", "guardian_id")
 
 @admin.register(Competency)

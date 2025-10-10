@@ -69,7 +69,8 @@ class StudentSerializer(serializers.ModelSerializer):
         model = Student
         fields = [
             'id','admission_no','name','dob','gender','guardian_id','klass','klass_detail','user','user_id',
-            'passport_no','phone','email','address','photo','photo_url'
+            'passport_no','phone','email','address','photo','photo_url',
+            'is_graduated','graduation_year'
         ]
 
     def get_photo_url(self, obj):
@@ -219,7 +220,7 @@ class ExamSerializer(serializers.ModelSerializer):
     inferred_term = serializers.SerializerMethodField(read_only=True)
     class Meta:
         model = Exam
-        fields = ['id','name','year','term','klass','date','total_marks','published','published_at','inferred_academic_year','inferred_term']
+        fields = ['id','name','year','term','klass','date','total_marks','published','published_at','grade_level_tag','inferred_academic_year','inferred_term']
 
     def _infer_year_and_term(self, exam):
         school = getattr(getattr(exam.klass, 'school', None), 'id', None)
@@ -246,13 +247,15 @@ class ExamSerializer(serializers.ModelSerializer):
 
 class ExamResultSerializer(serializers.ModelSerializer):
     component_detail = SubjectComponentSerializer(source='component', read_only=True)
+    subject_detail = SubjectSerializer(source='subject', read_only=True)
+    exam_detail = ExamSerializer(source='exam', read_only=True)
     # Optional: allows teacher to specify the total marks the entered score is out of.
     # Backend will scale the stored marks to the component/exam scale.
     out_of = serializers.FloatField(write_only=True, required=False, allow_null=True)
     percentage = serializers.SerializerMethodField(read_only=True)
     class Meta:
         model = ExamResult
-        fields = ['id','exam','student','subject','component','component_detail','marks','out_of','percentage']
+        fields = ['id','exam','exam_detail','student','subject','subject_detail','component','component_detail','marks','out_of','percentage']
 
     def get_percentage(self, obj):
         # Compute percentage based on component.max_marks, else exam.total_marks, else 100

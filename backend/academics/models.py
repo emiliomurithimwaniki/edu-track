@@ -1,4 +1,5 @@
 from django.db import models
+from django.db import IntegrityError
 from django.conf import settings
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
@@ -194,12 +195,17 @@ class Student(models.Model):
     guardian_id = models.CharField(max_length=100, blank=True)
     klass = models.ForeignKey(Class, null=True, on_delete=models.SET_NULL)
     user = models.OneToOneField(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    # Keep school for scoping when klass is null (graduated)
+    school = models.ForeignKey('accounts.School', null=True, blank=True, on_delete=models.SET_NULL, related_name='students')
     # Extra personal information fields
     passport_no = models.CharField(max_length=50, blank=True)
     phone = models.CharField(max_length=50, blank=True)
     email = models.EmailField(blank=True)
     address = models.CharField(max_length=255, blank=True)
     photo = models.ImageField(upload_to='student_photos/', null=True, blank=True)
+    # Graduation status
+    is_graduated = models.BooleanField(default=False)
+    graduation_year = models.IntegerField(null=True, blank=True)
 
 class Competency(models.Model):
     code = models.CharField(max_length=50, unique=True)
@@ -274,9 +280,62 @@ class Exam(models.Model):
     # Derive school from class -> school for scoping
     published = models.BooleanField(default=False)
     published_at = models.DateTimeField(null=True, blank=True)
+    # Snapshot the grade level at the time the exam was created to avoid issues after promotions
+    grade_level_tag = models.CharField(max_length=20, blank=True, db_index=True, help_text="Grade level at the time the exam was set (e.g., 'Grade 4')")
+
+    class Meta:
+        ordering = ['name', 'year', 'term', 'klass__grade_level', 'klass__stream__name', 'date', 'id']
 
     def __str__(self):
         return f"{self.name} {self.year} T{self.term} - {self.klass}"
+
+    def save(self, *args, **kwargs):
+        # Ensure grade_level_tag is set on creation and remains stable after class promotions
+        try:
+            if not self.grade_level_tag and getattr(self, 'klass', None) and getattr(self.klass, 'grade_level', None):
+                self.grade_level_tag = self.klass.grade_level
+        except Exception:
+            pass
+
+        # Auto-format the exam name as '<BaseName> Term <term> <year>'
+        # BaseName is the provided name with any existing 'Term X YYYY' suffix removed
+        try:
+            import re
+            raw_name = (self.name or '').strip() or 'Exam'
+            # Strip existing suffix patterns like ' - Term 3', 'Term 3 2025', ' - 2025', etc.
+            base = re.sub(r"\s*[-,]*\s*Term\s*\d+\s*(\d{4})?$", "", raw_name, flags=re.IGNORECASE).strip()
+            if not base:
+                base = 'Exam'
+            yr = None
+            # Prefer explicit year field
+            if getattr(self, 'year', None):
+                try:
+                    yr = int(self.year)
+                except Exception:
+                    yr = None
+            # Fallback: infer from AcademicYear by date and school
+            if yr is None and getattr(self, 'date', None) and getattr(self, 'klass', None) and getattr(self.klass, 'school_id', None):
+                from .models import AcademicYear
+                ay = AcademicYear.objects.filter(
+                    school_id=self.klass.school_id,
+                    start_date__lte=self.date,
+                    end_date__gte=self.date,
+                ).first()
+                if ay:
+                    try:
+                        yr = int(getattr(ay.end_date, 'year', None) or getattr(ay.start_date, 'year', None))
+                    except Exception:
+                        yr = None
+            # Build formatted name
+            if getattr(self, 'term', None):
+                if yr is not None:
+                    self.name = f"{base} Term {int(self.term)} {yr}"
+                else:
+                    self.name = f"{base} Term {int(self.term)}"
+        except Exception:
+            # Keep provided name on any failure
+            pass
+        super().save(*args, **kwargs)
 
 
 class ExamResult(models.Model):
@@ -361,10 +420,20 @@ class AcademicYear(models.Model):
         classes = Class.objects.filter(school=self.school).select_related('stream')
         
         with transaction.atomic():
+            # Build a human-readable summary of actions for UI/debugging
+            summary = {
+                'school_id': getattr(self.school, 'id', None),
+                'label': getattr(self, 'label', None),
+                'graduated_classes': [],
+                'moved_classes': [],  # moved to existing target
+                'renamed_classes': [],  # in-place rename
+                'skipped': [],  # classes skipped with reason
+            }
             for class_obj in classes:
                 try:
                     # Skip if no grade level or stream
                     if not class_obj.grade_level or not class_obj.stream:
+                        summary['skipped'].append({'class_id': class_obj.id, 'name': getattr(class_obj, 'name', ''), 'reason': 'missing grade_level or stream'})
                         continue
                         
                     # Format the current grade level to ensure consistency
@@ -372,32 +441,127 @@ class AcademicYear(models.Model):
                     
                     # Extract the numeric part from the formatted grade
                     import re
-                    match = re.search(r'\d+', current_grade)
+                    # Prefer explicit pattern 'Grade <num>'
+                    m_named = re.search(r'\bgrade\s*(\d{1,2})\b', current_grade, flags=re.IGNORECASE)
+                    match = m_named if m_named else re.search(r'\b(\d{1,2})\b', current_grade)
                     if not match:
+                        summary['skipped'].append({'class_id': class_obj.id, 'name': getattr(class_obj, 'name', ''), 'reason': f'no numeric grade in "{current_grade}"'})
                         continue
                         
                     # Increment the grade number
-                    current_grade_num = int(match.group())
-                    new_grade_num = current_grade_num + 1
-                    
-                    # Create a new class with the promoted grade
-                    new_class = Class.objects.create(
-                        grade_level=str(new_grade_num),  # Will be formatted in save()
-                        stream=class_obj.stream,
-                        teacher=class_obj.teacher,
-                        school=class_obj.school
-                    )
-                    
-                    # Copy subjects to the new class
-                    new_class.subjects.set(class_obj.subjects.all())
-                    
-                    # Update students to the new class
-                    class_obj.student_set.update(klass=new_class)
+                    try:
+                        current_grade_num = int(match.group(1) if match.lastindex else match.group())
+                    except Exception:
+                        summary['skipped'].append({'class_id': class_obj.id, 'name': getattr(class_obj, 'name', ''), 'reason': f'failed to parse grade from "{current_grade}"'})
+                        continue
+                    # Graduation rule: ONLY Grade 9 graduates. Others must be promoted.
+                    if current_grade_num == 9:
+                        grad_year = None
+                        try:
+                            # Prefer academic year end_date year
+                            if getattr(self, 'end_date', None):
+                                grad_year = int(self.end_date.year)
+                            else:
+                                # Fallback: try to parse label like "2024/2025" -> 2025
+                                parts = [int(p) for p in re.findall(r'\d{4}', str(getattr(self, 'label', '')))]
+                                if parts:
+                                    grad_year = parts[-1]
+                        except Exception:
+                            grad_year = None
+                        # Graduate students one-by-one for reliability
+                        moved_count = 0
+                        for stu in class_obj.student_set.select_for_update().all():
+                            stu.klass = None
+                            stu.is_graduated = True
+                            stu.graduation_year = grad_year
+                            stu.school = class_obj.school
+                            stu.save(update_fields=['klass','is_graduated','graduation_year','school'])
+                            moved_count += 1
+                        summary['graduated_classes'].append({
+                            'class_id': class_obj.id,
+                            'from': getattr(class_obj, 'name', ''),
+                            'students': moved_count,
+                            'graduation_year': grad_year,
+                        })
+                    else:
+                        new_grade_num = current_grade_num + 1
+                        # Check if a destination class already exists (same stream & school)
+                        target = Class.objects.filter(
+                            school=class_obj.school,
+                            stream=class_obj.stream,
+                            grade_level=Class.format_grade_level(str(new_grade_num))
+                        ).first()
+                        if target:
+                            # Reassign class teacher to the destination class and clear from the old class
+                            target.teacher = class_obj.teacher
+                            target.save(update_fields=['teacher'])
+                            class_obj.teacher = None
+                            class_obj.save(update_fields=['teacher'])
+                            # Move students one-by-one to the existing destination class
+                            moved_count = 0
+                            for stu in class_obj.student_set.select_for_update().all():
+                                stu.klass = target
+                                stu.is_graduated = False
+                                stu.school = class_obj.school
+                                stu.save(update_fields=['klass','is_graduated','school'])
+                                moved_count += 1
+                            summary['moved_classes'].append({
+                                'from_id': class_obj.id,
+                                'from': getattr(class_obj, 'name', ''),
+                                'to_id': target.id,
+                                'to': getattr(target, 'name', ''),
+                                'students': moved_count,
+                            })
+                        else:
+                            # In-place promote: update this class's grade_level so name regenerates
+                            try:
+                                class_obj.grade_level = str(new_grade_num)
+                                # Save triggers name regeneration in Class.save(); may raise IntegrityError if target exists
+                                class_obj.save(update_fields=['grade_level', 'name'])
+                                # Students stay in the same class (now renamed)
+                                summary['renamed_classes'].append({
+                                    'class_id': class_obj.id,
+                                    'from': f"{current_grade} {class_obj.stream.name}",
+                                    'to': class_obj.name,
+                                    'students': class_obj.student_set.count(),
+                                })
+                            except IntegrityError:
+                                # Fallback: destination exists, move students instead
+                                target = Class.objects.filter(
+                                    school=class_obj.school,
+                                    stream=class_obj.stream,
+                                    grade_level=Class.format_grade_level(str(new_grade_num))
+                                ).first()
+                                if not target:
+                                    raise
+                                # Reassign teacher during fallback as well
+                                target.teacher = class_obj.teacher
+                                target.save(update_fields=['teacher'])
+                                class_obj.teacher = None
+                                class_obj.save(update_fields=['teacher'])
+                                # Move students one-by-one
+                                moved_count = 0
+                                for stu in class_obj.student_set.select_for_update().all():
+                                    stu.klass = target
+                                    stu.is_graduated = False
+                                    stu.school = class_obj.school
+                                    stu.save(update_fields=['klass','is_graduated','school'])
+                                    moved_count += 1
+                                summary['moved_classes'].append({
+                                    'from_id': class_obj.id,
+                                    'from': getattr(class_obj, 'name', ''),
+                                    'to_id': target.id,
+                                    'to': getattr(target, 'name', ''),
+                                    'students': moved_count,
+                                })
                     
                     # Log the promotion
                     import logging
                     logger = logging.getLogger(__name__)
-                    logger.info(f"Promoted class {class_obj.name} to {new_class.name}")
+                    if current_grade_num == 9:
+                        logger.info(f"Graduated students from {class_obj.name}; max grade reached")
+                    else:
+                        logger.info(f"Promoted class {class_obj.get_class_name()} to Grade {new_grade_num} {class_obj.stream.name}")
                     
                 except Exception as e:
                     # Log error but continue with other classes
@@ -405,7 +569,9 @@ class AcademicYear(models.Model):
                     logger = logging.getLogger(__name__)
                     logger.error(f"Error promoting class {getattr(class_obj, 'id', 'unknown')}: {str(e)}", 
                                exc_info=True)
+                    summary['skipped'].append({'class_id': getattr(class_obj, 'id', None), 'name': getattr(class_obj, 'name', ''), 'reason': f'error: {str(e)}'})
 
+            return summary
     def save(self, *args, **kwargs):
         # Check if this is an existing instance being set as current
         if self.pk:
@@ -417,9 +583,6 @@ class AcademicYear(models.Model):
                     school=self.school, 
                     is_current=True
                 ).exclude(pk=self.pk).update(is_current=False)
-                
-                # Promote classes to the next grade level
-                self.promote_classes()
         
         self.full_clean()
         super().save(*args, **kwargs)

@@ -2,12 +2,21 @@ from rest_framework.decorators import api_view, permission_classes, parser_class
 from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 import json
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.contrib.auth import get_user_model
 from .serializers import UserSerializer, SchoolSerializer
 from .permissions import IsAdminOrStaff
 from django.db import IntegrityError
 from django.db.models import Q
+from django.utils.text import slugify
+from rest_framework_simplejwt.tokens import RefreshToken
+from .models import School, EmailVerificationToken
+from django.core.cache import cache
+from django.core.mail import send_mail
+from django.conf import settings
+from datetime import timedelta
+import secrets
+from django.utils import timezone
 
 User = get_user_model()
 
@@ -266,3 +275,129 @@ def school_info(request):
     if not school:
         return Response({"detail": "No school linked to this user"}, status=404)
     return Response(SchoolSerializer(school, context={"request": request}).data)
+
+
+# Public endpoint: create a trial school + admin
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@parser_classes([JSONParser])
+def trial_signup(request):
+    """
+    Create a trial School and an Admin user.
+    Body: {school_name, admin_email, admin_password, admin_first_name, admin_last_name, phone}
+    Returns: {access, refresh, user, school}
+    """
+    data = request.data or {}
+    school_name = (data.get('school_name') or '').strip()
+    admin_email = (data.get('admin_email') or '').strip().lower()
+    admin_password = data.get('admin_password') or ''
+    admin_first_name = (data.get('admin_first_name') or '').strip()
+    admin_last_name = (data.get('admin_last_name') or '').strip()
+    phone = (data.get('phone') or '').strip()
+    honeypot = (data.get('website') or '').strip()
+
+    if not school_name or not admin_email or not admin_password:
+        return Response({"detail": "school_name, admin_email and admin_password are required"}, status=400)
+
+    # Honeypot: reject bots that fill hidden field
+    if honeypot:
+        return Response({"detail": "Invalid submission"}, status=400)
+
+    # Simple IP rate limiting: max 5 attempts per hour per IP
+    ip = request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or request.META.get('REMOTE_ADDR', '')
+    cache_key = f"trial_signup:{ip}"
+    attempts = cache.get(cache_key, 0)
+    if attempts and int(attempts) >= 5:
+        return Response({"detail": "Rate limit exceeded. Please try again later."}, status=429)
+    cache.set(cache_key, int(attempts) + 1, 60 * 60)
+
+    # Generate a unique school code
+    base_code = slugify(school_name)[:30] or 'school'
+    code = base_code
+    i = 1
+    while School.objects.filter(code=code).exists():
+        code = f"{base_code}-{i}"
+        i += 1
+
+    # Create school
+    # Create school with trial flags
+    school = School.objects.create(
+        name=school_name,
+        code=code,
+        is_trial=True,
+        trial_expires_at=timezone.now() + timedelta(days=14),
+        trial_student_limit=100,
+        feature_flags={"pos": False, "sms": False},
+    )
+
+    # Create admin user
+    username = admin_email
+    if User.objects.filter(username=username).exists():
+        return Response({"detail": "A user with this email already exists"}, status=400)
+
+    user = User.objects.create_user(
+        username=username,
+        email=admin_email,
+        password=admin_password,
+        role='admin',
+        first_name=admin_first_name,
+        last_name=admin_last_name,
+        phone=phone,
+        school=school,
+    )
+
+    # Issue auth tokens
+    refresh = RefreshToken.for_user(user)
+    payload = {
+        "access": str(refresh.access_token),
+        "refresh": str(refresh),
+        "user": UserSerializer(user).data,
+        "school": SchoolSerializer(school).data,
+    }
+    # Create verification token
+    token = secrets.token_urlsafe(48)
+    EmailVerificationToken.objects.create(
+        user=user,
+        token=token,
+        expires_at=timezone.now() + timedelta(days=3),
+    )
+    verify_url = request.build_absolute_uri(f"/api/auth/verify-email/?token={token}")
+    # Send welcome email (best-effort)
+    try:
+        send_mail(
+            subject="Welcome to EduTrack — Your 14‑day trial",
+            message=(
+                f"Hi {admin_first_name or 'there'},\n\n"
+                f"Your trial school '{school.name}' has been created. You can sign in with {admin_email}.\n\n"
+                f"Trial ends on {school.trial_expires_at.date() if school.trial_expires_at else ''}.\n\n"
+                "Please verify your email by opening this link: " + verify_url + "\n\n"
+                "Thanks for trying EduTrack!"
+            ),
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'no-reply@edutrack.local',
+            recipient_list=[admin_email],
+            fail_silently=True,
+        )
+    except Exception:
+        pass
+
+    return Response(payload, status=201)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def verify_email(request):
+    token = request.query_params.get('token', '').strip()
+    if not token:
+        return Response({"detail": "token is required"}, status=400)
+    try:
+        rec = EmailVerificationToken.objects.select_related('user').get(token=token)
+    except EmailVerificationToken.DoesNotExist:
+        return Response({"detail": "Invalid or expired token"}, status=400)
+    if rec.is_expired():
+        rec.delete()
+        return Response({"detail": "Token expired"}, status=400)
+    user = rec.user
+    user.email_verified = True
+    user.save(update_fields=['email_verified'])
+    rec.delete()
+    return Response({"detail": "Email verified"})

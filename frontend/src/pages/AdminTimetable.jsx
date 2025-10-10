@@ -57,6 +57,8 @@ export default function AdminTimetable() {
   // Save feedback
   const [saveError, setSaveError] = useState(null)
   const [lastSavedAt, setLastSavedAt] = useState(null)
+  // Prevent initial autosave race that can overwrite server with {}
+  const [assignmentsLoaded, setAssignmentsLoaded] = useState(false)
 
   // ===== Auto-generate (greedy, teacher no-conflict) =====
   const autoGenerate = ()=>{
@@ -575,11 +577,13 @@ export default function AdminTimetable() {
         if(fromServer && Object.keys(fromServer).length > 0){
           setBlockAssignments(fromServer)
           try{ localStorage.setItem(key, JSON.stringify(fromServer)) }catch{}
+          setAssignmentsLoaded(true)
           return
         }
         // Fallback to local storage
         const raw = localStorage.getItem(key)
         setBlockAssignments(raw? JSON.parse(raw) : {})
+        setAssignmentsLoaded(true)
       } catch { setBlockAssignments({}) }
     })()
   }, [currentPlan?.id])
@@ -591,6 +595,8 @@ export default function AdminTimetable() {
     ;(async()=>{
       try{
         setSaveError(null)
+        // Avoid autosaving before initial load completes to prevent overwriting server with {}
+        if(!assignmentsLoaded) return
         if(currentPlan?.id){
           await api.patch(`/academics/timetable/plans/${currentPlan.id}/`, { block_assignments: blockAssignments })
           setLastSavedAt(new Date().toISOString())
@@ -602,10 +608,11 @@ export default function AdminTimetable() {
         setSaveError(msg)
       }
     })()
-  }, [currentPlan?.id, blockAssignments])
+  }, [currentPlan?.id, blockAssignments, assignmentsLoaded])
 
   const saveBlockAssignmentsNow = async()=>{
     if(!currentPlan?.id) return
+    if(!assignmentsLoaded) { return }
     setSavingBlocks(true)
     try{
       setSaveError(null)

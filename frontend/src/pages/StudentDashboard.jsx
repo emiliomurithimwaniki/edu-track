@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
 
 export default function StudentDashboard(){
   const { pathname } = useLocation()
+  const navigate = useNavigate()
   const [student, setStudent] = useState(null)
   const [assessments, setAssessments] = useState([])
   const [attendance, setAttendance] = useState([])
@@ -18,6 +19,8 @@ export default function StudentDashboard(){
   const [payForm, setPayForm] = useState({ amount: '', method: 'mpesa', reference: '' })
   const [payError, setPayError] = useState('')
   const [paySubmitting, setPaySubmitting] = useState(false)
+  // Report Card modal
+  const [showReport, setShowReport] = useState(false)
   // Derive current tab from URL: /student, /student/academics, /student/finance
   const currentTab = useMemo(() => {
     if (pathname.includes('/student/academics')) return 'academics'
@@ -34,51 +37,82 @@ export default function StudentDashboard(){
     if (!Array.isArray(examResults) || examResults.length === 0) return []
     const byExam = new Map()
     for (const r of examResults) {
-      const key = r.exam || 'Exam'
-      const entry = byExam.get(key) || { sum: 0, count: 0 }
+      const label = r.exam_detail?.name || r.exam || 'Exam'
+      const entry = byExam.get(label) || { sum: 0, count: 0 }
       entry.sum += Number(r.marks || 0)
       entry.count += 1
-      byExam.set(key, entry)
+      byExam.set(label, entry)
     }
-    // Keep insertion order as returned by API
     return Array.from(byExam.entries()).map(([label, { sum, count }]) => ({ label, avg: count ? (sum / count) : 0 }))
   }, [examResults])
+
+  // Derive the most recent exam label from available results (best-effort)
+  const latestExamLabel = useMemo(() => {
+    if (!Array.isArray(examResults) || examResults.length === 0) return null
+    // Keep first occurrence order from API (already grouped in performance using names)
+    const first = examResults[0]
+    return first?.exam_detail?.name || first?.exam || null
+  }, [examResults])
+
+  // Build report card rows for the latest exam
+  const reportRows = useMemo(() => {
+    if (!latestExamLabel) return []
+    return (examResults || []).filter(r => ((r.exam_detail?.name || r.exam) === latestExamLabel))
+      .map(r => ({
+        subjectLabel: r.subject_detail ? `${r.subject_detail.code ? r.subject_detail.code + ' — ' : ''}${r.subject_detail.name || ''}` : String(r.subject || ''),
+        marks: Number(r.marks || 0)
+      }))
+  }, [examResults, latestExamLabel])
+
+  const reportTotals = useMemo(() => {
+    const total = reportRows.reduce((s, r) => s + (Number.isFinite(r.marks) ? r.marks : 0), 0)
+    const count = reportRows.length || 0
+    const average = count ? (total / count) : 0
+    return { total, average }
+  }, [reportRows])
 
   useEffect(()=>{
     let mounted = true
     ;(async () => {
+      setLoading(true)
+      setError('')
       try {
-        setLoading(true)
-        setError('')
-        // Load the current student first
+        // 1) Student is required
         const stRes = await api.get('/academics/students/my/')
-        const st = stRes.data
         if (!mounted) return
+        const st = stRes.data
         setStudent(st)
 
-        // Load finances and records in parallel
-        const [assRes, attRes, exmRes, invRes, sumRes] = await Promise.all([
+        // 2) Secondary data is optional; fetch concurrently and tolerate failures
+        const settled = await Promise.allSettled([
+          // assessments
           api.get(`/academics/assessments/my/`),
+          // attendance
           api.get(`/academics/attendance/my/`),
+          // exam results
           api.get(`/academics/exam_results/?student=${st.id}`),
+          // invoices
           api.get('/finance/invoices/my/'),
+          // summary
           api.get('/finance/invoices/my-summary/'),
         ])
         if (!mounted) return
-        setAssessments(assRes.data)
-        setAttendance(attRes.data)
-        setExamResults(exmRes.data)
-        setInvoices(invRes.data)
-        setSummary(sumRes.data)
+        const [assS, attS, exmS, invS, sumS] = settled
+        setAssessments(assS.status==='fulfilled' ? (assS.value?.data || []) : [])
+        setAttendance(attS.status==='fulfilled' ? (attS.value?.data || []) : [])
+        setExamResults(exmS.status==='fulfilled' ? (exmS.value?.data || []) : [])
+        setInvoices(invS.status==='fulfilled' ? (invS.value?.data || []) : [])
+        setSummary(sumS.status==='fulfilled' ? (sumS.value?.data || { total_billed:0, total_paid:0, balance:0 }) : { total_billed:0, total_paid:0, balance:0 })
       } catch (e) {
         if (!mounted) return
-        setError(e?.response?.data?.detail || e?.message || 'Failed to load your dashboard')
+        // Only block page when we cannot load the student record
+        setError(e?.response?.data?.detail || e?.message || 'Failed to load your profile')
       } finally {
         if (mounted) setLoading(false)
       }
     })()
     return () => { mounted = false }
-  },[])
+  }, [])
 
   const classLabel = useMemo(() => {
     const k = student?.klass_detail
@@ -237,6 +271,22 @@ export default function StudentDashboard(){
 
       {currentTab === 'academics' && (
         <>
+          {/* Report Card quick access */}
+          <div className="grid md:grid-cols-2 gap-6">
+            <div className="bg-white rounded shadow p-4">
+              <div className="flex items-center justify-between mb-1">
+                <h2 className="font-medium">Report Card</h2>
+                <button
+                  className="text-sm px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-60"
+                  onClick={()=> latestExamLabel ? navigate('/student/report-card') : null}
+                  disabled={!latestExamLabel}
+                >{latestExamLabel ? 'View' : 'No Exam Yet'}</button>
+              </div>
+              <div className="text-sm text-gray-600">{latestExamLabel ? `Latest exam: ${latestExamLabel}` : 'Your report card will appear here after the first exam is published.'}</div>
+            </div>
+            <div></div>
+          </div>
+
           {/* Assessments and Attendance */}
           <div className="grid md:grid-cols-2 gap-6">
             <div className="bg-white rounded shadow p-4">
@@ -317,8 +367,16 @@ export default function StudentDashboard(){
                 <tbody>
                   {examResults.map(r => (
                     <tr key={r.id} className="border-t">
-                      <td>{r.exam}</td>
-                      <td>{r.subject}</td>
+                      <td>{r.exam_detail?.name || r.exam}</td>
+                      <td>
+                        {r.subject_detail
+                          ? (
+                              (r.subject_detail.code ? `${r.subject_detail.code} — ` : '') +
+                              (r.subject_detail.name || '')
+                            )
+                          : r.subject
+                        }
+                      </td>
                       <td>{r.marks}</td>
                     </tr>
                   ))}
@@ -468,6 +526,39 @@ export default function StudentDashboard(){
             <button className="px-4 py-2 rounded text-white bg-blue-600 disabled:opacity-60" disabled={editSubmitting}>{editSubmitting? 'Saving…':'Save'}</button>
           </div>
         </form>
+      </Modal>
+
+      {/* Report Card Modal */}
+      <Modal open={showReport} onClose={()=>setShowReport(false)} title={latestExamLabel ? `Report Card — ${latestExamLabel}` : 'Report Card'} size="md">
+        {reportRows.length === 0 ? (
+          <div className="text-sm text-gray-600">No results available yet.</div>
+        ) : (
+          <div className="grid gap-3">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr><th>Subject</th><th>Marks</th></tr>
+              </thead>
+              <tbody>
+                {reportRows.map((row, i) => (
+                  <tr key={i} className="border-t"><td>{row.subjectLabel}</td><td>{row.marks}</td></tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t font-medium"><td>Total</td><td>{reportTotals.total.toFixed(2)}</td></tr>
+                <tr className="font-medium"><td>Average</td><td>{reportTotals.average.toFixed(2)}</td></tr>
+              </tfoot>
+            </table>
+            <div className="flex justify-end gap-2">
+              <button className="px-4 py-2 rounded border" onClick={()=>setShowReport(false)}>Close</button>
+              <button
+                className="px-4 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+                onClick={()=>{
+                  try{ window.print() }catch(_){}
+                }}
+              >Print</button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )

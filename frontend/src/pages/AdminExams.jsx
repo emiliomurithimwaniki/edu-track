@@ -24,10 +24,34 @@ export default function AdminExams(){
   const [publishingId, setPublishingId] = useState(null)
   const [banner, setBanner] = useState('')
   const [currentTerm, setCurrentTerm] = useState(null)
+  // Group by exam name modal
+  const [groupedOpen, setGroupedOpen] = useState(false)
+  const [groupedName, setGroupedName] = useState('')
+  const [groupedItems, setGroupedItems] = useState([])
+  // Filters
+  const [search, setSearch] = useState('')
+  const [filterGrade, setFilterGrade] = useState('')
+  const [filterClass, setFilterClass] = useState('')
+  const [filterStatus, setFilterStatus] = useState('all') // all|published|unpublished
 
   // Navigate to CBC Competencies (Curriculum) page
   const handleCBCCompetencies = () => {
     navigate('/admin/curriculum')
+  }
+
+  // Open modal showing all classes/grades that share the same exam name
+  const openByName = async (name) => {
+    if (!name) return
+    try{
+      setGroupedName(name)
+      setGroupedItems([])
+      const { data } = await api.get('/academics/exams/by-name', { params: { name, include_history: true } })
+      const items = Array.isArray(data?.items) ? data.items : []
+      setGroupedItems(items)
+      setGroupedOpen(true)
+    }catch(err){
+      setBanner(err?.response?.data?.detail || 'Failed to load grouped exams')
+    }
   }
 
   const publishExam = async (exam) => {
@@ -48,7 +72,7 @@ export default function AdminExams(){
 
   const load = async () => {
     const [ex, cl, sbj, term] = await Promise.all([
-      api.get('/academics/exams/'),
+      api.get('/academics/exams/', { params: { include_history: true } }),
       api.get('/academics/classes/'),
       api.get('/academics/subjects/'),
       api.get('/academics/terms/current/').catch(()=>({ data: null })),
@@ -65,6 +89,26 @@ export default function AdminExams(){
     }))
   }
   useEffect(()=>{ load() }, [])
+
+  // Derive grade options from classes
+  const gradeOptions = Array.from(new Set((classes||[]).map(c=>c.grade_level))).filter(Boolean)
+
+  // Compute filtered list
+  const filteredExams = exams.filter(e => {
+    const klass = classes.find(c=>c.id===e.klass)
+    const className = klass?.name || ''
+    const gradeLevel = klass?.grade_level || ''
+    // search
+    const q = search.trim().toLowerCase()
+    const matchesSearch = !q || e.name.toLowerCase().includes(q) || className.toLowerCase().includes(q) || String(e.year).includes(q)
+    // grade filter
+    const matchesGrade = !filterGrade || gradeLevel === filterGrade
+    // class filter
+    const matchesClass = !filterClass || String(e.klass) === String(filterClass)
+    // status filter
+    const matchesStatus = filterStatus==='all' || (filterStatus==='published' ? !!e.published : !e.published)
+    return matchesSearch && matchesGrade && matchesClass && matchesStatus
+  })
 
   const openResults = async (exam) => {
     setSelectedExam(exam)
@@ -160,12 +204,50 @@ export default function AdminExams(){
           {banner && (
             <div className="mb-2 text-sm bg-blue-50 text-blue-800 px-3 py-2 rounded">{banner}</div>
           )}
+          {/* Filters */}
+          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between mb-3">
+            <div className="flex flex-wrap gap-2 items-end">
+              <div className="flex flex-col">
+                <label className="text-xs text-gray-600">Search</label>
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, class, year" className="border p-2 rounded w-64" />
+              </div>
+              <div className="flex flex-col">
+                <label className="text-xs text-gray-600">Grade</label>
+                <select value={filterGrade} onChange={e=>setFilterGrade(e.target.value)} className="border p-2 rounded w-44">
+                  <option value="">All Grades</option>
+                  {gradeOptions.map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-col">
+                <label className="text-xs text-gray-600">Class</label>
+                <select value={filterClass} onChange={e=>setFilterClass(e.target.value)} className="border p-2 rounded w-52">
+                  <option value="">All Classes</option>
+                  {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-col">
+                <label className="text-xs text-gray-600">Status</label>
+                <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="border p-2 rounded w-40">
+                  <option value="all">All</option>
+                  <option value="published">Published</option>
+                  <option value="unpublished">Unpublished</option>
+                </select>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={()=>{setSearch('');setFilterGrade('');setFilterClass('');setFilterStatus('all')}} className="border px-3 py-2 rounded">Clear</button>
+            </div>
+          </div>
           <table className="w-full text-left text-sm">
             <thead><tr><th>Name</th><th>Year</th><th>Term</th><th>Class</th><th>Date</th><th>Total</th><th>Status</th><th></th></tr></thead>
             <tbody>
-              {exams.map(e => (
+              {filteredExams.map(e => (
                 <tr key={e.id} className="border-t">
-                  <td>{e.name}</td>
+                  <td>
+                    <button onClick={()=>openByName(e.name)} className="text-blue-700 hover:underline" title="Show all classes for this exam name">
+                      {e.name}
+                    </button>
+                  </td>
                   <td>{e.year}</td>
                   <td>T{e.term}</td>
                   <td>{classes.find(c=>c.id===e.klass)?.name || e.klass}</td>
@@ -304,6 +386,53 @@ export default function AdminExams(){
           </div>
           <div className="flex justify-end">
             <button onClick={()=>setShowResults(false)} className="px-4 py-2 rounded border">Close</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Grouped by Exam Name Modal */}
+      <Modal open={groupedOpen} onClose={()=>setGroupedOpen(false)} title={`Exams — ${groupedName}`} size="xl">
+        <div className="space-y-3">
+          {groupedItems.length === 0 ? (
+            <div className="text-sm text-gray-600">No exams found for this name.</div>
+          ) : (
+            <div className="overflow-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr>
+                    <th className="border px-2 py-1 text-left">Grade</th>
+                    <th className="border px-2 py-1 text-left">Class</th>
+                    <th className="border px-2 py-1 text-left">Year</th>
+                    <th className="border px-2 py-1 text-left">Term</th>
+                    <th className="border px-2 py-1 text-left">Date</th>
+                    <th className="border px-2 py-1 text-left">Status</th>
+                    <th className="border px-2 py-1 text-left">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupedItems.map(item => (
+                    <tr key={item.id}>
+                      <td className="border px-2 py-1">{item.grade_level_tag || item.klass?.grade_level || '-'}</td>
+                      <td className="border px-2 py-1">{item.klass?.name || '-'}</td>
+                      <td className="border px-2 py-1">{item.year}</td>
+                      <td className="border px-2 py-1">T{item.term}</td>
+                      <td className="border px-2 py-1">{item.date}</td>
+                      <td className="border px-2 py-1">{item.published ? 'Published' : 'Draft'}</td>
+                      <td className="border px-2 py-1">
+                        <div className="flex gap-3">
+                          <button onClick={()=>viewResults({ id: item.id })} className="text-green-700">View Results</button>
+                          <button onClick={()=>navigate(`/admin/results?exam=${item.id}&grade=${encodeURIComponent(item.grade_level_tag || item.klass?.grade_level || '')}`)} className="text-indigo-700">Results Page</button>
+                          <button onClick={()=>publishExam({ id: item.id, name: groupedName, published: item.published })} disabled={!!item.published} className={`text-purple-700 ${item.published? 'opacity-50 cursor-not-allowed':''}`}>{item.published ? 'Published' : 'Publish'}</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="flex justify-end">
+            <button onClick={()=>setGroupedOpen(false)} className="px-4 py-2 rounded border">Close</button>
           </div>
         </div>
       </Modal>

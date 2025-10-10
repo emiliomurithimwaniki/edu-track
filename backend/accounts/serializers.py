@@ -9,7 +9,10 @@ class SchoolSerializer(serializers.ModelSerializer):
     logo_url = serializers.SerializerMethodField()
     class Meta:
         model = School
-        fields = ["id","name","code","address","motto","aim","logo","logo_url","social_links"]
+        fields = [
+            "id","name","code","address","motto","aim","logo","logo_url","social_links",
+            "is_trial","trial_expires_at","trial_student_limit","feature_flags",
+        ]
 
     def get_logo_url(self, obj):
         if not obj.logo:
@@ -29,5 +32,5 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             "id","username","email","first_name","last_name",
-            "role","phone","school","is_staff","is_superuser"
+            "role","phone","school","is_staff","is_superuser","email_verified"
         ]

@@ -3,3 +3,25 @@
 @tailwind utilities;
 
 body { @apply text-gray-800; }
+
+/* Custom utilities for polished UI across the app */
+@layer utilities {
+  /* Subtle shake for error states */
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-6px); }
+    40% { transform: translateX(6px); }
+    60% { transform: translateX(-4px); }
+    80% { transform: translateX(4px); }
+  }
+  .animate-shake { animation: shake 360ms cubic-bezier(.36,.07,.19,.97) both; }
+
+  /* Soft focus outline used on inputs */
+  .focus-soft:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25); /* indigo-500 */
+  }
+
+  /* Hairline borders look crisp on high-DPI */
+  .border-hairline { box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06); }
+}

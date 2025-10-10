@@ -7,6 +7,8 @@ from django.db.models import Q
 from django.db import IntegrityError, transaction
 from django.db.models import Sum, Avg
 from django.http import HttpResponse
+from django.conf import settings
+import threading
 from io import BytesIO, StringIO
 from django.utils import timezone
 try:
@@ -141,6 +143,14 @@ class ClassViewSet(viewsets.ModelViewSet):
         school = getattr(getattr(self.request, 'user', None), 'school', None)
         if school:
             qs = qs.filter(school=school)
+        # Hide only empty Grade 9 classes (graduated), keep other empty classes visible for enrollment
+        try:
+            from .models import Class as ClassModel
+            grade9 = ClassModel.format_grade_level('9')  # 'Grade 9'
+            qs = qs.exclude(grade_level=grade9, student__isnull=True).distinct()
+        except Exception:
+            # Fallback: if anything goes wrong, do not exclude
+            pass
         return qs
 
     @action(detail=False, methods=['get'], permission_classes=[IsTeacherOrAdmin], url_path='mine')
@@ -180,10 +190,104 @@ class ExamViewSet(viewsets.ModelViewSet):
         if user and getattr(user, 'role', None) == 'teacher' and not (user.is_staff or user.is_superuser):
             qs = qs.filter(Q(klass__teacher=user) | Q(klass__subject_teachers__teacher=user)).distinct()
 
+        # Default: limit to current academic year unless include_history=true
+        include_history = str(self.request.query_params.get('include_history', 'false')).lower() in ('1','true','yes')
+        if not include_history and school:
+            try:
+                ay = AcademicYear.objects.filter(school=school, is_current=True).first()
+                if ay:
+                    qs = qs.filter(date__gte=ay.start_date, date__lte=ay.end_date)
+            except Exception:
+                pass
+
+        # When filtering by grade, use the persistent grade tag captured at exam creation
         grade = self.request.query_params.get('grade')
         if grade:
-            qs = qs.filter(klass__grade_level=grade)
+            try:
+                from .models import Class as ClassModel
+                formatted = ClassModel.format_grade_level(grade)
+                qs = qs.filter(grade_level_tag=formatted)
+            except Exception:
+                qs = qs.filter(grade_level_tag=grade)
         return qs
+
+    @action(detail=False, methods=['get'], permission_classes=[IsTeacherOrAdmin], url_path='by-name')
+    def by_name(self, request):
+        """Return all exams that share the same name, optionally filtered by year and term.
+        Query params:
+          - name: required, exam name (case-insensitive exact match)
+          - year: optional int
+          - term: optional int (1..3)
+          - include_history: optional bool, default false (when false, limits to current Academic Year)
+        Response: list of exams with class/grade labels for rendering a grouped view.
+        """
+        name = request.query_params.get('name')
+        if not name:
+            return Response({'detail': 'name is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        qs = self.get_queryset().filter(name__iexact=name)
+
+        # Optional filters
+        year = request.query_params.get('year')
+        term = request.query_params.get('term')
+        if year:
+            try:
+                qs = qs.filter(year=int(year))
+            except Exception:
+                pass
+        if term:
+            try:
+                qs = qs.filter(term=int(term))
+            except Exception:
+                pass
+
+        # Order consistently by year desc, term asc, grade label, stream name, date
+        qs = qs.order_by('-year', 'term', 'grade_level_tag', 'klass__stream__name', 'date', 'id')
+
+        data = []
+        for e in qs.select_related('klass', 'klass__stream'):
+            data.append({
+                'id': e.id,
+                'name': e.name,
+                'year': e.year,
+                'term': e.term,
+                'date': e.date,
+                'total_marks': e.total_marks,
+                'published': e.published,
+                'published_at': e.published_at,
+                'grade_level_tag': getattr(e, 'grade_level_tag', None),
+                'klass': {
+                    'id': getattr(e.klass, 'id', None),
+                    'name': getattr(e.klass, 'name', None),
+                    'grade_level': getattr(e.klass, 'grade_level', None),
+                    'stream': getattr(getattr(e.klass, 'stream', None), 'name', None),
+                }
+            })
+        return Response({'name': name, 'items': data})
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAdmin], url_path='bulk-assign')
+    def bulk_assign(self, request):
+        """Admin-only: Assign a list of students to a class.
+        Body: { "klass": <class_id>, "student_ids": [1,2,3] }
+        Sets is_graduated=False and student.school to klass.school.
+        Useful for repairing unassigned students after promotion.
+        """
+        try:
+            klass_id = request.data.get('klass')
+            student_ids = request.data.get('student_ids') or []
+            if not klass_id or not isinstance(student_ids, list) or len(student_ids) == 0:
+                return Response({'detail': 'Provide klass (id) and non-empty student_ids list'}, status=400)
+            klass = Class.objects.filter(id=klass_id).first()
+            if not klass:
+                return Response({'detail': 'Class not found'}, status=404)
+            # Scope check: admin must belong to same school
+            school = getattr(getattr(request, 'user', None), 'school', None)
+            if school and klass.school_id != getattr(school, 'id', None) and not (request.user.is_staff or request.user.is_superuser):
+                return Response({'detail': 'Class must belong to your school'}, status=403)
+            updated = Student.objects.filter(id__in=student_ids).update(klass=klass, is_graduated=False, school=klass.school)
+            return Response({'detail': 'Students assigned', 'updated': updated})
+        except Exception as e:
+            return Response({'detail': 'Bulk assign failed', 'error': str(e)}, status=500)
 
     def perform_create(self, serializer):
         # Only admins can create exams
@@ -292,6 +396,68 @@ class ExamViewSet(viewsets.ModelViewSet):
             'subject_means': subj_means,
             'subject_mean_percentages': subj_mean_percentages,
         }
+
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated], url_path='rank')
+    def rank(self, request, pk=None):
+        """Return the student's position in their class and in their grade for this exam.
+        Query params: student=<id>
+        Grade rank is computed across all classes in the same school with the same grade_level
+        and exams that share the same (name, year, term).
+        """
+        exam = self.get_object()
+        try:
+            student_id = int(request.query_params.get('student'))
+        except Exception:
+            return Response({'detail': 'student query parameter is required'}, status=400)
+
+        # Class position using local summary
+        summary = self._build_summary(exam)
+        class_list = summary.get('students', [])
+        class_pos = None
+        for st in class_list:
+            if str(st.get('id')) == str(student_id):
+                class_pos = st.get('position')
+                break
+
+        # Grade cohort: same school, same grade_level, same (name, year, term)
+        school = getattr(getattr(request, 'user', None), 'school', None)
+        grade_level = getattr(getattr(exam, 'klass', None), 'grade_level', None)
+        same_grade_exams = Exam.objects.filter(
+            name=exam.name,
+            year=exam.year,
+            term=exam.term,
+            klass__grade_level=grade_level,
+        )
+        if school:
+            same_grade_exams = same_grade_exams.filter(klass__school=school)
+
+        # Build totals per student across subjects for each exam separately, then pick the exam this student belongs to
+        # For grade ranking, we compare students' totals within their respective classes but on the same exam definition
+        totals = {}
+        # Collect students for grade rank across all matching exams
+        res = ExamResult.objects.filter(exam__in=same_grade_exams).values('exam_id', 'student_id').annotate(total=Sum('marks'))
+        for row in res:
+            sid = row['student_id']
+            totals[sid] = float(row['total'] or 0)
+
+        # Sort by total desc and assign ranks with ties
+        ordered = sorted(([sid, sc] for sid, sc in totals.items()), key=lambda x: x[1], reverse=True)
+        grade_pos = None
+        last_total = None
+        position = 0
+        for idx, (sid, sc) in enumerate(ordered, start=1):
+            if last_total is None or sc < last_total:
+                position = idx
+                last_total = sc
+            if str(sid) == str(student_id):
+                grade_pos = position
+                break
+
+        return Response({
+            'class': {'position': class_pos, 'size': len(class_list)},
+            'grade': {'position': grade_pos, 'size': len(ordered)},
+            'exam': {'id': exam.id, 'name': exam.name, 'year': exam.year, 'term': exam.term},
+        })
 
     @action(detail=False, methods=['get'], permission_classes=[IsTeacherOrAdmin], url_path='compare')
     def compare_exams(self, request):
@@ -450,144 +616,564 @@ class ExamViewSet(viewsets.ModelViewSet):
         resp['Content-Disposition'] = f'attachment; filename="exam_{exam.id}_summary.csv"'
         return resp
 
+    @action(detail=True, methods=['get'], permission_classes=[permissions.IsAuthenticated], url_path='report-card-pdf')
+    def report_card_pdf(self, request, pk=None):
+        """Generate a single student's report card PDF for this exam.
+        Query params: student=<id>
+        Permissions modeled after summary():
+        - Admins/staff: allowed
+        - Teachers: allowed if published or assigned to class/subject
+        - Students: allowed only if published and requesting their own record
+        """
+        exam = self.get_object()
+        try:
+            student_id = int(request.query_params.get('student'))
+        except Exception:
+            return Response({'detail': 'student query parameter is required'}, status=400)
+
+        user = request.user
+        if not self._is_admin(request):
+            if getattr(user, 'role', None) == 'teacher':
+                is_class_teacher = getattr(exam.klass, 'teacher_id', None) == getattr(user, 'id', None)
+                is_subject_teacher = ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user).exists()
+                is_published = bool(getattr(exam, 'published', False)) or str(getattr(exam, 'status', '')).lower() == 'published'
+                if not (is_published or is_class_teacher or is_subject_teacher):
+                    return Response({'detail': 'You do not have permission to perform this action.'}, status=status.HTTP_403_FORBIDDEN)
+            elif getattr(user, 'role', None) == 'student':
+                is_published = bool(getattr(exam, 'published', False)) or str(getattr(exam, 'status', '')).lower() == 'published'
+                if not is_published:
+                    return Response({'detail': 'Results not published yet'}, status=403)
+                # ensure requested student is the logged-in user
+                stu_user_id = Student.objects.filter(pk=student_id).values_list('user_id', flat=True).first()
+                if not (stu_user_id and int(stu_user_id) == int(getattr(user, 'id', 0))):
+                    return Response({'detail': 'Not allowed'}, status=403)
+            else:
+                return Response({'detail': 'You do not have permission to perform this action.'}, status=403)
+
+        if not REPORTLAB_AVAILABLE:
+            return Response({'detail': 'PDF generation library not installed. Please install reportlab.'}, status=500)
+
+        data = self._build_summary(exam)
+        subjects = data.get('subjects', [])
+        st_row = next((s for s in data.get('students', []) if str(s.get('id')) == str(student_id)), None)
+        if not st_row:
+            return Response({'detail': 'No results found for this student in this exam'}, status=404)
+
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.lib.units import mm
+        from reportlab.lib import colors
+        from reportlab.lib.utils import ImageReader
+
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=18*mm, bottomMargin=14*mm)
+        styles = getSampleStyleSheet()
+        elements = []
+
+        # Modern header band (simple swoosh using polygons)
+        def _draw_header(canvas, doc):
+            width, height = A4
+            canvas.saveState()
+            # light background band
+            canvas.setFillColor(colors.Color(0.93, 0.96, 1))
+            canvas.rect(0, height-60, width, 60, fill=1, stroke=0)
+            # accent swoosh
+            canvas.setFillColor(colors.Color(0.17, 0.53, 0.87))
+            p = canvas.beginPath()
+            p.moveTo(0, height)
+            p.lineTo(0, height-50)
+            p.lineTo(width*0.25, height-15)
+            p.lineTo(width*0.5, height)
+            p.close()
+            canvas.drawPath(p, fill=1, stroke=0)
+            canvas.restoreState()
+
+        school = getattr(request.user, 'school', None)
+        logo_path = None
+        try:
+            if school and getattr(school, 'logo', None) and getattr(school.logo, 'path', None):
+                logo_path = school.logo.path  # Platypus Image expects a filename or file-like object
+        except Exception:
+            logo_path = None
+
+        # Header: logo + name + motto + title
+        head_cells = []
+        if logo_path:
+            head_cells.append([Image(logo_path, width=14*mm, height=14*mm), Paragraph(f"<b>{school.name}</b><br/><font size=9 color=grey>{getattr(school,'motto','') or ''}</font>", styles['Normal'])])
+            head_tbl = Table(head_cells, colWidths=[16*mm, 150*mm])
+            head_tbl.setStyle(TableStyle([
+                ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+                ('LEFTPADDING',(0,0),(-1,-1),0),
+                ('RIGHTPADDING',(0,0),(-1,-1),0),
+            ]))
+            elements.append(head_tbl)
+        else:
+            elements.append(Paragraph(f"<b>{getattr(school,'name','')}</b>", styles['Title']))
+            if getattr(school,'motto',''):
+                elements.append(Paragraph(f"<font size=9 color=grey>{school.motto}</font>", styles['Normal']))
+        elements.append(Spacer(1, 6))
+        title = f"STUDENT REPORT CARD — {exam.name}"
+        elements.append(Paragraph(f"<b>{title}</b>", styles['Heading3']))
+        elements.append(Spacer(1, 6))
+
+        stu = Student.objects.filter(pk=student_id).select_related('klass').first()
+        # Summary block (modern layout): left = student info, right = metrics (positions, total, average)
+        try:
+            summary_local = self._build_summary(exam)
+            class_students = summary_local.get('students', [])
+            class_size = len(class_students)
+            class_pos = next((s.get('position') for s in class_students if str(s.get('id')) == str(student_id)), None)
+
+            # Grade rank across same school+grade_level and same exam name/year/term
+            grade_level = getattr(getattr(exam, 'klass', None), 'grade_level', None)
+            same_grade_exams = Exam.objects.filter(
+                name=exam.name,
+                year=exam.year,
+                term=exam.term,
+                klass__grade_level=grade_level,
+            )
+            school_scope = getattr(getattr(self.request, 'user', None), 'school', None)
+            if school_scope:
+                same_grade_exams = same_grade_exams.filter(klass__school=school_scope)
+            rows_ag = ExamResult.objects.filter(exam__in=same_grade_exams).values('student_id').annotate(total=Sum('marks'))
+            totals_map = {r['student_id']: float(r['total'] or 0) for r in rows_ag}
+            ordered = sorted(totals_map.items(), key=lambda x: x[1], reverse=True)
+            grade_size = len(ordered)
+            grade_pos = None
+            last_total = None
+            position = 0
+            for idx, (sid, sc) in enumerate(ordered, start=1):
+                if last_total is None or sc < last_total:
+                    position = idx
+                    last_total = sc
+                if str(sid) == str(student_id):
+                    grade_pos = position
+                    break
+
+            # Left: student info
+            left_tbl = Table([
+                ['Student', getattr(stu, 'name', '')],
+                ['Admission No', getattr(stu, 'admission_no','')],
+                ['Class', getattr(getattr(stu,'klass',None),'name','')],
+            ], colWidths=[35*mm, 65*mm])
+            left_tbl.setStyle(TableStyle([
+                ('GRID',(0,0),(-1,-1),0.3, colors.lightgrey),
+                ('BACKGROUND',(0,0),(0,-1), colors.whitesmoke),
+                ('TEXTCOLOR',(0,0),(0,-1), colors.grey),
+                ('FONTNAME',(0,0),(0,-1),'Helvetica-Bold'),
+                ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+            ]))
+
+            # Right: metrics
+            right_tbl = Table([
+                ['Class Position', f"{class_pos if class_pos is not None else '-'} / {class_size}"],
+                ['Grade Position', f"{grade_pos if grade_pos is not None else '-'} / {grade_size}"],
+                ['Total', f"{st_row.get('total', 0)}"],
+                ['Average', f"{st_row.get('average', 0)}"],
+            ], colWidths=[30*mm, 30*mm])
+            right_tbl.setStyle(TableStyle([
+                ('GRID',(0,0),(-1,-1),0.3, colors.lightgrey),
+                ('BACKGROUND',(0,0),(0,-1), colors.whitesmoke),
+                ('TEXTCOLOR',(0,0),(0,-1), colors.grey),
+                ('FONTNAME',(0,0),(0,-1),'Helvetica-Bold'),
+                ('ALIGN',(1,0),(1,-1),'RIGHT'),
+                ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+            ]))
+
+            # Parent: two columns
+            summary_tbl = Table([[left_tbl, right_tbl]], colWidths=[100*mm, 60*mm])
+            summary_tbl.setStyle(TableStyle([
+                ('VALIGN',(0,0),(-1,-1),'TOP'),
+                ('LEFTPADDING',(0,0),(-1,-1),0),
+                ('RIGHTPADDING',(0,0),(-1,-1),0),
+                ('TOPPADDING',(0,0),(-1,-1),0),
+                ('BOTTOMPADDING',(0,0),(-1,-1),0),
+            ]))
+            elements.append(summary_tbl)
+            elements.append(Spacer(1, 8))
+        except Exception:
+            # If anything fails in summary computation, continue without blocking PDF
+            elements.append(Spacer(1, 4))
+
+        # Teacher + Remarks block
+        try:
+            teacher_name = ''
+            try:
+                t = getattr(getattr(exam, 'klass', None), 'teacher', None)
+                if t:
+                    teacher_name = (getattr(t, 'first_name', '') + ' ' + getattr(t, 'last_name', '')).strip() or getattr(t, 'username', '')
+            except Exception:
+                teacher_name = ''
+            avg_val = float(st_row.get('average') or 0)
+            # Simple remark rubric if custom bands absent
+            if avg_val >= 80:
+                remark = 'Excellent performance — keep it up.'
+            elif avg_val >= 70:
+                remark = 'Very good work.'
+            elif avg_val >= 60:
+                remark = 'Good, aim higher.'
+            elif avg_val >= 50:
+                remark = 'Fair — effort needed.'
+            else:
+                remark = 'Needs improvement — consult your teacher.'
+            tr_tbl = Table([
+                ['Class Teacher', teacher_name or '-'],
+                ['Remarks', remark],
+            ], colWidths=[40*mm, 140*mm])
+            tr_tbl.setStyle(TableStyle([
+                ('GRID',(0,0),(-1,-1),0.3, colors.lightgrey),
+                ('BACKGROUND',(0,0),(0,-1), colors.whitesmoke),
+                ('TEXTCOLOR',(0,0),(0,-1), colors.grey),
+                ('ALIGN',(0,0),(0,-1),'LEFT'),
+            ]))
+            elements.append(tr_tbl)
+            elements.append(Spacer(1, 6))
+        except Exception:
+            pass
+
+        rows = [['Subject','Marks']]
+        for s in subjects:
+            sid = str(s['id'])
+            mark = st_row['marks'].get(sid)
+            rows.append([s.get('code') or s.get('name'), '' if mark is None else round(float(mark),2)])
+        rows.append(['Total', st_row.get('total', 0)])
+        rows.append(['Average', st_row.get('average', 0)])
+
+        tbl = Table(rows, colWidths=[120*mm, 40*mm])
+        tbl.setStyle(TableStyle([
+            ('GRID',(0,0),(-1,-1),0.3, colors.lightgrey),
+            ('BACKGROUND',(0,0),(-1,0), colors.whitesmoke),
+            ('ALIGN',(1,1),(1,-1),'RIGHT'),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('BOTTOMPADDING',(0,0),(-1,0),6),
+        ]))
+        elements.append(tbl)
+
+        # Signature lines section
+        try:
+            sign_tbl = Table([
+                ['Class Teacher Signature', '', 'Principal Signature', '', "Parent's Signature", ''],
+                ['', '', '', '', '', ''],
+                ['Date', '', 'Date', '', 'Date', ''],
+            ], colWidths=[35*mm, 25*mm, 35*mm, 25*mm, 35*mm, 25*mm])
+            sign_tbl.setStyle(TableStyle([
+                ('LINEABOVE',(1,1),(1,1),0.3, colors.grey),
+                ('LINEABOVE',(3,1),(3,1),0.3, colors.grey),
+                ('LINEABOVE',(5,1),(5,1),0.3, colors.grey),
+                ('TOPPADDING',(0,1),(-1,1),10),
+                ('BOTTOMPADDING',(0,1),(-1,1),2),
+                ('TEXTCOLOR',(0,0),(-1,0), colors.grey),
+            ]))
+            elements.append(Spacer(1, 10))
+            elements.append(sign_tbl)
+        except Exception:
+            pass
+
+        def footer(canv, doc_):
+            from reportlab.lib.pagesizes import A4 as PS
+            canv.saveState()
+            ts = timezone.localtime(timezone.now()).strftime('%Y-%m-%d %H:%M')
+            canv.setFont('Helvetica', 8)
+            canv.drawString(12*mm, 10*mm, ts)
+            page_num = canv.getPageNumber()
+            txt = f"Page {page_num}"
+            w = canv.stringWidth(txt, 'Helvetica', 8)
+            canv.drawString(PS[0]-12*mm-w, 10*mm, txt)
+            canv.restoreState()
+
+        # Combine header band and footer so both render
+        def draw_page(canv, doc_):
+            try:
+                _draw_header(canv, doc_)
+            except Exception:
+                pass
+            footer(canv, doc_)
+
+        doc.build(elements, onFirstPage=draw_page, onLaterPages=draw_page)
+        pdf = buffer.getvalue()
+        buffer.close()
+        resp = HttpResponse(pdf, content_type='application/pdf')
+        resp['Content-Disposition'] = f'attachment; filename="exam_{exam.id}_student_{student_id}_report_card.pdf"'
+        return resp
+
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin], url_path='publish')
     def publish(self, request, pk=None):
-        """Mark exam as published and notify students via email/SMS with per-student PDF if available.
-        The student's dashboard will then show results.
+        """Mark exam as published and kick off background notifications (email/SMS/PDF/chat).
+        Returns immediately so the frontend can update status without waiting for delivery.
         """
         exam = self.get_object()
         if getattr(exam, 'published', False):
             return Response({'detail': 'Exam already published', 'published_at': getattr(exam, 'published_at', None)}, status=200)
 
-        # Import here to avoid hard deps if communications app changes
-        from communications.utils import send_sms, send_email_with_attachment, send_email_safe, create_messages_for_users
-
-        # Gather results grouped by student
-        res = ExamResult.objects.filter(exam=exam).select_related('student','subject')
-        by_student = {}
-        for r in res:
-            s = r.student
-            entry = by_student.setdefault(s.id, {
-                'student': s,
-                'marks': {},
-                'total': 0.0,
-                'count': 0,
-            })
-            entry['marks'][r.subject_id] = float(r.marks)
-            entry['total'] += float(r.marks)
-            entry['count'] += 1
-
-        # Build a simple subject list for column order
-        subjects = list(exam.klass.subjects.all())
-
-        # Send messages per student
-        chat_user_ids = []
-        # Collect in-app notifications for bulk insert
-        notifications_bulk = []
-        for sid, data in by_student.items():
-            s = data['student']
-            total = data['total']
-            avg = round(total / data['count'], 2) if data['count'] else 0.0
-            # SMS
-            sms = f"Hi {getattr(s,'name','Student')}, your results for {exam.name} (Year {exam.year}, Term {exam.term}) are out. Total: {round(total,2)}, Average: {avg}. Login to the portal to view details."
-            try:
-                phone = getattr(s, 'phone', None) or getattr(getattr(s, 'user', None), 'phone', None) or getattr(s, 'guardian_id', None)
-                if phone:
-                    send_sms(phone, sms)
-            except Exception:
-                pass
-
-            # Collect for chat mirror and in-app notifications
-            if getattr(s, 'user_id', None):
-                chat_user_ids.append(s.user_id)
-                try:
-                    from communications.models import Notification
-                    notifications_bulk.append(Notification(user_id=s.user_id, message=sms, type='in_app'))
-                except Exception:
-                    pass
-
-            # Email with optional PDF attachment
-            recipient = getattr(s, 'email', None) or getattr(getattr(s, 'user', None), 'email', None)
-            body = (
-                f"Dear {getattr(s,'name','Student')},\n\n"
-                f"Your exam results for {exam.name} (Year {exam.year}, Term {exam.term}, Class {exam.klass.name}) are now available. "
-                f"Total: {round(total,2)}  Average: {avg}.\n\n"
-                "You can also log into the student portal to view full details.\n\n"
-                "Regards, School Administration"
-            )
-
-            attachment_bytes = None
-            filename = f"results_{exam.id}_{s.id}.pdf"
-            if REPORTLAB_AVAILABLE:
-                try:
-                    buf = BytesIO()
-                    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
-                    elements = []
-                    styles = getSampleStyleSheet()
-                    elements.append(Paragraph(f"<b>{exam.klass.school.name if getattr(exam.klass,'school',None) else 'School'}</b>", styles['Title']))
-                    elements.append(Paragraph(f"{exam.name} — Year {exam.year} — Term {exam.term}", styles['Normal']))
-                    elements.append(Paragraph(f"Student: {s.name}", styles['Normal']))
-                    elements.append(Spacer(1, 12))
-                    # Table header: Subject, Marks
-                    rows = [["Subject", "Marks"]]
-                    for subj in subjects:
-                        rows.append([subj.code, str(data['marks'].get(subj.id, ''))])
-                    rows.append(["Total", str(round(total,2))])
-                    rows.append(["Average", str(avg)])
-                    tbl = Table(rows, repeatRows=1)
-                    tbl.setStyle(TableStyle([
-                        ('BACKGROUND',(0,0),(-1,0), colors.HexColor('#f3f4f6')),
-                        ('GRID',(0,0),(-1,-1), 0.25, colors.HexColor('#d1d5db')),
-                        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-                    ]))
-                    elements.append(tbl)
-                    doc.build(elements)
-                    attachment_bytes = buf.getvalue()
-                except Exception:
-                    attachment_bytes = None
-            # Send
-            try:
-                if recipient:
-                    if attachment_bytes:
-                        send_email_with_attachment(
-                            subject=f"{exam.name} Results",
-                            message=body,
-                            recipient=recipient,
-                            filename=filename,
-                            content=attachment_bytes,
-                            mimetype='application/pdf'
-                        )
-                    else:
-                        send_email_safe(f"{exam.name} Results", body, recipient)
-            except Exception:
-                pass
-
-        # Create in-app notifications in bulk (best-effort)
-        try:
-            if notifications_bulk:
-                from communications.models import Notification as _Notif
-                _Notif.objects.bulk_create(notifications_bulk, ignore_conflicts=True)
-        except Exception:
-            pass
-
-        # Mirror to chat so students see it in Messages UI
-        try:
-            if chat_user_ids:
-                body = f"Your exam results for {exam.name} (Year {exam.year}, Term {exam.term}) are now available."
-                create_messages_for_users(
-                    school_id=getattr(exam.klass, 'school_id', None),
-                    sender_id=getattr(request.user, 'id', None),
-                    body=body,
-                    recipient_user_ids=chat_user_ids,
-                    system_tag='results',
-                )
-        except Exception:
-            pass
-
-        # Mark published
+        # Mark published first for immediate UI feedback
         exam.published = True
         exam.published_at = timezone.now()
         exam.save(update_fields=['published','published_at'])
+
+        def _send_notifications(exam_id: int, actor_id: int | None):
+            try:
+                exam_local = Exam.objects.select_related('klass','klass__school').get(pk=exam_id)
+                # Import here to avoid hard deps if communications app changes
+                from communications.utils import send_sms, send_email_with_attachment, send_email_safe, create_messages_for_users
+
+                # Gather results grouped by student
+                res = ExamResult.objects.filter(exam=exam_local).select_related('student','subject')
+                by_student = {}
+                for r in res:
+                    s = r.student
+                    entry = by_student.setdefault(s.id, {
+                        'student': s,
+                        'marks': {},
+                        'total': 0.0,
+                        'count': 0,
+                    })
+                    entry['marks'][r.subject_id] = float(r.marks)
+                    entry['total'] += float(r.marks)
+                    entry['count'] += 1
+
+                # Build a simple subject list for column order
+                subjects = list(exam_local.klass.subjects.all())
+
+                # Send messages per student
+                chat_user_ids = []
+                # Collect in-app notifications for bulk insert
+                notifications_bulk = []
+                for sid, data in by_student.items():
+                    s = data['student']
+                    total = data['total']
+                    avg = round(total / data['count'], 2) if data['count'] else 0.0
+                    # Build dashboard URL for students
+                    try:
+                        frontend_base = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
+                    except Exception:
+                        frontend_base = 'http://localhost:5173'
+                    dashboard_url = f"{frontend_base.rstrip('/')}/student"
+
+                    # SMS with per-subject marks
+                    subject_parts = []
+                    try:
+                        for subj in subjects:
+                            code_or_name = getattr(subj, 'code', None) or getattr(subj, 'name', '')
+                            mark = data['marks'].get(subj.id)
+                            if mark is not None:
+                                subject_parts.append(f"{code_or_name}:{round(float(mark),2)}")
+                    except Exception:
+                        subject_parts = []
+                    subj_summary = ", ".join(subject_parts) if subject_parts else ""
+                    sms = (
+                        f"Hi {getattr(s,'name','Student')}, {exam_local.name} (Y{exam_local.year} T{exam_local.term}) results. "
+                        + (f"{subj_summary}. " if subj_summary else "")
+                        + f"Total: {round(total,2)}, Avg: {avg}. Login: {dashboard_url}"
+                    )
+                    try:
+                        phone = getattr(s, 'phone', None) or getattr(getattr(s, 'user', None), 'phone', None) or getattr(s, 'guardian_id', None)
+                        if phone:
+                            send_sms(phone, sms)
+                    except Exception:
+                        pass
+
+                    # Collect for chat mirror and in-app notifications
+                    if getattr(s, 'user_id', None):
+                        chat_user_ids.append(s.user_id)
+                        try:
+                            from communications.models import Notification
+                            notifications_bulk.append(Notification(user_id=s.user_id, message=sms, type='in_app'))
+                        except Exception:
+                            pass
+
+                    # Email with optional PDF attachment
+                    recipient = getattr(s, 'email', None) or getattr(getattr(s, 'user', None), 'email', None)
+                    body = (
+                        f"Dear {getattr(s,'name','Student')},\n\n"
+                        f"Your exam results for {exam_local.name} (Year {exam_local.year}, Term {exam_local.term}, Class {exam_local.klass.name}) are now available. "
+                        f"Total: {round(total,2)}  Average: {avg}.\n\n"
+                        f"View your dashboard: {dashboard_url}\n\n"
+                        "Regards, School Administration"
+                    )
+
+                    attachment_bytes = None
+                    filename = f"results_{exam_local.id}_{s.id}.pdf"
+                    if REPORTLAB_AVAILABLE:
+                        try:
+                            buf = BytesIO()
+                            doc = SimpleDocTemplate(
+                                buf,
+                                pagesize=A4,
+                                leftMargin=36,
+                                rightMargin=36,
+                                topMargin=48,
+                                bottomMargin=36,
+                            )
+                            elements = []
+                            styles = getSampleStyleSheet()
+                            # Custom style tweaks
+                            from reportlab.lib.styles import ParagraphStyle
+                            brand = colors.HexColor('#111827')  # gray-900
+                            accent = colors.HexColor('#2563eb')  # blue-600
+                            subtle = colors.HexColor('#6b7280')  # gray-500
+
+                            # Header with logo, school, and exam meta in two columns
+                            header_rows = []
+                            try:
+                                school = getattr(exam_local.klass, 'school', None)
+                                logo_img = None
+                                if school and getattr(school, 'logo', None) and getattr(school.logo, 'path', None):
+                                    logo_img = Image(school.logo.path, width=50, height=50)
+                                title = Paragraph(
+                                    f"<b>{(school.name if school else 'School')}</b>",
+                                    ParagraphStyle('title', parent=styles['Title'], textColor=brand)
+                                )
+                                sub = Paragraph(
+                                    f"{getattr(school,'motto','') or ''}",
+                                    ParagraphStyle('sub', parent=styles['Normal'], textColor=subtle, fontSize=9)
+                                )
+                                meta = Paragraph(
+                                    f"<b>{exam_local.name}</b> &nbsp; Year {exam_local.year} &nbsp; Term {exam_local.term} &nbsp; Class {exam_local.klass.name}",
+                                    ParagraphStyle('meta', parent=styles['Normal'], textColor=brand, fontSize=10)
+                                )
+                                left = logo_img if logo_img else ''
+                                right = [title, sub, meta]
+                                header_rows.append([left, right])
+                                hdr = Table(header_rows, colWidths=[60, doc.width-60])
+                                hdr.setStyle(TableStyle([
+                                    ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+                                    ('LEFTPADDING',(0,0),(-1,-1),0),
+                                    ('RIGHTPADDING',(0,0),(-1,-1),0),
+                                ]))
+                                elements.append(hdr)
+                            except Exception:
+                                elements.append(Paragraph(f"<b>{exam_local.name}</b>", styles['Title']))
+
+                            elements.append(Spacer(1, 12))
+
+                            # Student info strip
+                            info = Table([
+                                [
+                                    Paragraph(f"<b>Student:</b> {getattr(s,'name','')}", styles['Normal']),
+                                    Paragraph(f"<b>Adm No:</b> {getattr(s,'admission_no','-')}", styles['Normal']),
+                                    Paragraph(f"<b>Date:</b> {timezone.localtime(timezone.now()).strftime('%Y-%m-%d')}", styles['Normal']),
+                                ]
+                            ], colWidths=[doc.width*0.45, doc.width*0.25, doc.width*0.30])
+                            info.setStyle(TableStyle([
+                                ('BACKGROUND',(0,0),(-1,-1), colors.HexColor('#f9fafb')),
+                                ('BOX',(0,0),(-1,-1), 0.5, colors.HexColor('#e5e7eb')),
+                                ('INNERGRID',(0,0),(-1,-1), 0.5, colors.HexColor('#e5e7eb')),
+                                ('LEFTPADDING',(0,0),(-1,-1),6),
+                                ('RIGHTPADDING',(0,0),(-1,-1),6),
+                                ('TOPPADDING',(0,0),(-1,-1),6),
+                                ('BOTTOMPADDING',(0,0),(-1,-1),6),
+                            ]))
+                            elements.append(info)
+
+                            elements.append(Spacer(1, 12))
+
+                            # Subjects table
+                            rows = [["Subject", "Marks"]]
+                            for subj in subjects:
+                                rows.append([subj.code or subj.name, str(data['marks'].get(subj.id, ''))])
+                            # Styled table
+                            tbl = Table(rows, repeatRows=1, colWidths=[doc.width*0.7, doc.width*0.3])
+                            tbl_style = [
+                                ('BACKGROUND',(0,0),(-1,0), colors.HexColor('#f3f4f6')),
+                                ('TEXTCOLOR',(0,0),(-1,0), brand),
+                                ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+                                ('ALIGN',(1,1),(-1,-1),'RIGHT'),
+                                ('GRID',(0,0),(-1,-1), 0.25, colors.HexColor('#e5e7eb')),
+                                ('ROWBACKGROUNDS',(0,1),(-1,-1), [colors.white, colors.HexColor('#fbfdff')]),
+                                ('LEFTPADDING',(0,0),(-1,-1),6),
+                                ('RIGHTPADDING',(0,0),(-1,-1),6),
+                                ('TOPPADDING',(0,0),(-1,-1),6),
+                                ('BOTTOMPADDING',(0,0),(-1,-1),6),
+                            ]
+                            tbl.setStyle(TableStyle(tbl_style))
+                            elements.append(tbl)
+
+                            elements.append(Spacer(1, 10))
+
+                            # Summary box
+                            summary = Table([
+                                [
+                                    Paragraph('<b>Total</b>', styles['Normal']),
+                                    Paragraph(f"{round(total,2)}", ParagraphStyle('num', parent=styles['Normal'], alignment=2, textColor=brand)),
+                                ],
+                                [
+                                    Paragraph('<b>Average</b>', styles['Normal']),
+                                    Paragraph(f"{avg}", ParagraphStyle('num2', parent=styles['Normal'], alignment=2, textColor=brand)),
+                                ]
+                            ], colWidths=[doc.width*0.7, doc.width*0.3])
+                            summary.setStyle(TableStyle([
+                                ('BACKGROUND',(0,0),(-1,-1), colors.HexColor('#f8fafc')),
+                                ('BOX',(0,0),(-1,-1), 0.6, colors.HexColor('#cbd5e1')),
+                                ('INNERGRID',(0,0),(-1,-1), 0.6, colors.HexColor('#e2e8f0')),
+                                ('LEFTPADDING',(0,0),(-1,-1),8),
+                                ('RIGHTPADDING',(0,0),(-1,-1),8),
+                                ('TOPPADDING',(0,0),(-1,-1),6),
+                                ('BOTTOMPADDING',(0,0),(-1,-1),6),
+                            ]))
+                            elements.append(summary)
+
+                            elements.append(Spacer(1, 14))
+
+                            # Footer note
+                            foot = Paragraph(
+                                f"Generated on {timezone.localtime(timezone.now()).strftime('%Y-%m-%d %H:%M')} · {(exam_local.klass.school.name if getattr(exam_local.klass,'school',None) else '')}",
+                                ParagraphStyle('foot', parent=styles['Normal'], textColor=subtle, fontSize=8)
+                            )
+                            elements.append(foot)
+
+                            doc.build(elements)
+                            attachment_bytes = buf.getvalue()
+                        except Exception:
+                            attachment_bytes = None
+                    # Send
+                    try:
+                        if recipient:
+                            if attachment_bytes:
+                                send_email_with_attachment(
+                                    subject=f"{exam_local.name} Results",
+                                    message=body,
+                                    recipient=recipient,
+                                    filename=filename,
+                                    content=attachment_bytes,
+                                    mimetype='application/pdf'
+                                )
+                            else:
+                                send_email_safe(f"{exam_local.name} Results", body, recipient)
+                    except Exception:
+                        pass
+
+                # Create in-app notifications in bulk (best-effort)
+                try:
+                    if notifications_bulk:
+                        from communications.models import Notification as _Notif
+                        _Notif.objects.bulk_create(notifications_bulk, ignore_conflicts=True)
+                except Exception:
+                    pass
+
+                # Mirror to chat so students see it in Messages UI
+                try:
+                    if chat_user_ids:
+                        body = f"Your exam results for {exam_local.name} (Year {exam_local.year}, Term {exam_local.term}) are now available."
+                        create_messages_for_users(
+                            school_id=getattr(exam_local.klass, 'school_id', None),
+                            sender_id=actor_id,
+                            body=body,
+                            recipient_user_ids=chat_user_ids,
+                            system_tag='results',
+                        )
+                except Exception:
+                    pass
+            except Exception:
+                # Avoid crashing the thread
+                import logging
+                logging.getLogger(__name__).exception('Exam publish notifications failed for exam %s', exam_id)
+
+        # Start background thread for notifications
+        actor_id = getattr(request.user, 'id', None)
+        t = threading.Thread(target=_send_notifications, args=(exam.id, actor_id), daemon=True)
+        t.start()
+
         return Response({'detail': 'Published', 'published_at': exam.published_at})
 
     @action(detail=True, methods=['get'], permission_classes=[IsAdmin], url_path='summary-pdf')
@@ -1553,21 +2139,65 @@ class StudentViewSet(viewsets.ModelViewSet):
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
     filter_backends = [DjangoFilterBackend]
-    # Allow simple server-side filtering by class and gender
-    filterset_fields = ['klass', 'gender']
+    # Allow server-side filtering by class, gender, graduation status, and year
+    filterset_fields = ['klass', 'gender', 'is_graduated', 'graduation_year']
     # Support JSON (default axios), form, and multipart (for photo uploads)
     parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def get_permissions(self):
+        """Permissions matrix for Student endpoints.
+        - my, my_update: any authenticated user (student portal)
+        - list/retrieve and other safe reads: teacher or admin
+        - mutations: admin only
+        """
+        act = getattr(self, 'action', None)
+        if act in ('my', 'my_update'):
+            return [permissions.IsAuthenticated()]
+        if act in ('list', 'retrieve') or self.request.method in permissions.SAFE_METHODS:
+            return [IsTeacherOrAdmin()]
+        return [IsAdmin()]
     def get_queryset(self):
         qs = super().get_queryset()
         user = getattr(self.request, 'user', None)
         school = getattr(user, 'school', None)
         if school:
-            qs = qs.filter(klass__school=school)
+            # Include students in classes of this school OR graduated students scoped by student.school
+            qs = qs.filter(Q(klass__school=school) | Q(school=school))
         # Optional grade filter via related class grade_level
         grade = self.request.query_params.get('grade')
         if grade:
             qs = qs.filter(klass__grade_level=grade)
         return qs
+
+    def perform_create(self, serializer):
+        """Ensure school scoping on create: derive school from klass or request.user.school."""
+        user = getattr(self.request, 'user', None)
+        school = getattr(user, 'school', None)
+        klass = serializer.validated_data.get('klass')
+        # If klass provided, ensure it belongs to the same school
+        if klass and school and klass.school_id != getattr(school, 'id', None):
+            raise ValidationError({'klass': 'Class must belong to your school'})
+        # Persist school for scoping (when klass is later cleared on graduation)
+        payload_school = getattr(klass, 'school', None) or school
+        serializer.save(school=payload_school)
+
+    def perform_update(self, serializer):
+        """Validate admin edit and maintain school scoping when class changes.
+        - If klass is set, it must belong to admin's school; set student.school from klass.school.
+        - If klass is cleared (None), keep existing student.school or fallback to admin's school.
+        """
+        user = getattr(self.request, 'user', None)
+        school = getattr(user, 'school', None)
+        klass = serializer.validated_data.get('klass', serializer.instance.klass)
+        # If setting a new class, validate school and update school field
+        if klass is not None:
+            if school and getattr(klass, 'school_id', None) not in (None, getattr(school, 'id', None)):
+                raise ValidationError({'klass': 'Class must belong to your school'})
+            serializer.save(school=getattr(klass, 'school', None))
+        else:
+            # klass cleared (e.g., graduation or temporary unassignment)
+            current_school = getattr(serializer.instance, 'school', None)
+            serializer.save(school=current_school or school)
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated], url_path='my')
     def my(self, request):
@@ -1908,7 +2538,26 @@ class AcademicYearViewSet(viewsets.ModelViewSet):
         ay = self.get_object()
         ay.is_current = True
         ay.save()
-        return Response({'detail': 'Current academic year updated'})
+        # Optional promotion when setting as current
+        promote = str(request.data.get('promote', 'false')).lower() in ('1','true','yes')
+        if promote:
+            try:
+                summary = ay.promote_classes()
+            except Exception as e:
+                return Response({'detail': 'Academic year set, but promotion failed', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({'detail': 'Current academic year updated', 'promoted': promote, **({'summary': summary} if promote else {})})
+
+    @action(detail=True, methods=['post'], permission_classes=[IsAdmin], url_path='promote')
+    def promote(self, request, pk=None):
+        """Explicitly trigger promotion of classes/students for this academic year.
+        Safe to call once per year; it creates next-grade classes and moves students accordingly.
+        """
+        ay = self.get_object()
+        try:
+            summary = ay.promote_classes()
+            return Response({'detail': 'Promotion completed', 'summary': summary})
+        except Exception as e:
+            return Response({'detail': 'Promotion failed', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class TermViewSet(viewsets.ModelViewSet):

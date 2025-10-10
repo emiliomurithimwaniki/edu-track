@@ -154,19 +154,19 @@ export default function LoginPage() {
         {/* Optional: gradient at bottom for contrast */}
         <div className="absolute inset-0 bg-gradient-to-b from-black/10 via-transparent to-black/30 pointer-events-none" />
       </div>
-      {/* Dark vignette overlay */}
-      <div className="absolute inset-0 bg-black/30" />
+      {/* Dark vignette overlay (non-interactive) */}
+      <div className="absolute inset-0 bg-black/30 pointer-events-none" />
       {/* Ambient gradient blobs */}
       <div className="pointer-events-none absolute -top-10 -left-10 h-72 w-72 bg-gradient-to-br from-indigo-500/40 to-purple-500/40 blur-3xl rounded-full" />
       <div className="pointer-events-none absolute bottom-10 -right-10 h-72 w-72 bg-gradient-to-br from-fuchsia-500/30 to-indigo-500/30 blur-3xl rounded-full" />
 
       {/* Header */}
-      <header className="hidden sm:flex relative z-10 items-center justify-between px-6 md:px-10 py-5 text-white">
+      <header className="hidden sm:flex relative z-10 items-center justify-between px-6 md:px-10 py-5 text-white/95">
         <div className="flex items-center gap-3">
           <AppLogo size={36} className="w-9 h-9 rounded-lg bg-white/10 p-1" />
           <a href="/" className="hidden sm:block text-sm hover:underline">Home</a>
         </div>
-        <div className="text-center font-semibold tracking-widest">EDU-TRACK</div>
+        <div className="text-center font-semibold tracking-widest drop-shadow">EDU-TRACK</div>
         <a href="mailto:EduTrack46@gmail.com" className="text-sm hover:underline">Contact Us</a>
       </header>
 
@@ -198,16 +198,16 @@ export default function LoginPage() {
             </div>
 
             {/* Right: Auth card */}
-            <div className="relative max-w-xl w-full mx-auto">
+            <div className="relative max-w-xl w-full mx-auto z-20 pointer-events-auto">
               {/* Gradient border wrapper */}
-              <div className="absolute -inset-0.5 rounded-2xl bg-gradient-to-r from-indigo-500/40 via-purple-500/40 to-pink-500/40 blur opacity-75" />
-              <div className={`relative bg-white/85 backdrop-blur-md rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.35)] ring-1 ring-white/60 p-6 md:p-8 transition-all duration-500 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}>
+              <div className="absolute -inset-0.5 rounded-2xl bg-gradient-to-r from-indigo-500/40 via-purple-500/40 to-pink-500/40 blur opacity-75 pointer-events-none" />
+              <div className={`relative z-20 bg-white/85 backdrop-blur-md rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.35)] ring-1 ring-white/60 p-6 md:p-8 transition-all duration-500 border-hairline ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}>
                 <div className="flex items-center justify-between">
                   <div className="inline-flex items-center gap-2">
                     <AppLogo size={28} className="h-7 w-7 rounded-md" />
                     <span className="sr-only">EduTrack</span>
                   </div>
-                  <h2 className="text-xl font-bold text-gray-900">{formStep === 'role' ? 'Select your role' : 'Log in'}</h2>
+                  <h2 className="text-xl md:text-2xl font-bold text-gray-900">{formStep === 'role' ? 'Select your role' : 'Log in'}</h2>
                   {formStep === 'credentials' && (
                     <button onClick={handleBackToRole} className="text-sm text-indigo-700 hover:underline">Change role</button>
                   )}
@@ -236,41 +236,43 @@ export default function LoginPage() {
                 {formStep === 'credentials' && (
                   <div className="mt-5">
                     {error && (
-                      <div className="mb-4 text-sm text-red-700 bg-red-100 border border-red-200 rounded-md px-3 py-2">{error}</div>
+                      <div className="mb-4 text-sm text-red-700 bg-red-100 border border-red-200 rounded-md px-3 py-2 animate-shake" role="alert">{error}</div>
                     )}
                     <form onSubmit={submit} className="space-y-5">
-                      {/* Username floating */}
+                      {/* Email-as-username floating */}
                       <div className="relative group">
                         <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
                           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><path d="M12 12c2.761 0 5-2.239 5-5s-2.239-5-5-5-5 2.239-5 5 2.239 5 5 5zm0 2c-3.866 0-7 3.134-7 7h14c0-3.866-3.134-7-7-7z"/></svg>
                         </span>
-                        <div className="absolute -inset-0.5 rounded-xl bg-gradient-to-r from-indigo-500/30 via-purple-500/30 to-pink-500/30 opacity-0 group-focus-within:opacity-100 blur transition" />
+                        {/* Subtle decorative glow (non-interactive) */}
+                        <div className="absolute -inset-0.5 rounded-xl bg-gradient-to-r from-indigo-500/15 via-purple-500/15 to-pink-500/15 opacity-0 group-focus-within:opacity-80 blur-sm transition pointer-events-none" />
                         <input
                           type="text"
                           value={username}
                           onChange={(e)=>setUsername(e.target.value)}
-                          placeholder=" "
-                          className="peer w-full rounded-xl border border-gray-200 bg-white/95 px-10 py-3.5 text-[15px] shadow-inner focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 transition"
+                          placeholder=""
+                          className="peer w-full rounded-xl border border-gray-300 bg-white px-10 py-3.5 text-[15px] shadow-inner focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-500 transition"
                           required
                         />
-                        <label className="pointer-events-none absolute left-10 top-1/2 -translate-y-1/2 text-gray-500 transition-all duration-200 peer-focus:-translate-y-4 peer-focus:text-xs peer-not-placeholder-shown:-translate-y-4 peer-not-placeholder-shown:text-xs">Username</label>
+                        <label className={`pointer-events-none absolute left-10 top-1/2 -translate-y-1/2 text-gray-500 transition-all duration-200 ${username ? '-translate-y-4 text-xs' : ''} peer-focus:-translate-y-4 peer-focus:text-xs`}>Email (username)</label>
+                        <div className="mt-1 text-[11px] text-gray-500">Admins: use the email you signed up with.</div>
                       </div>
                       {/* Password floating */}
                       <div className="relative group">
                         <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
                           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"><path d="M17 8V7a5 5 0 10-10 0v1H5v12h14V8h-2zm-8 0V7a3 3 0 016 0v1H9z"/></svg>
                         </span>
-                        <div className="absolute -inset-0.5 rounded-xl bg-gradient-to-r from-indigo-500/30 via-purple-500/30 to-pink-500/30 opacity-0 group-focus-within:opacity-100 blur transition" />
+                        <div className="absolute -inset-0.5 rounded-xl bg-gradient-to-r from-indigo-500/30 via-purple-500/30 to-pink-500/30 opacity-0 group-focus-within:opacity-100 blur transition pointer-events-none" />
                         <input
                           type={showPassword ? 'text' : 'password'}
                           value={password}
                           onChange={(e)=>setPassword(e.target.value)}
                           onKeyUp={(e)=> setCapsLockOn(e.getModifierState && e.getModifierState('CapsLock'))}
-                          placeholder=" "
-                          className="peer w-full rounded-xl border border-gray-200 bg-white/95 px-10 py-3.5 pr-16 text-[15px] shadow-inner focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-400 transition"
+                          placeholder=""
+                          className="peer w-full rounded-xl border border-gray-200 bg-white/95 px-10 py-3.5 pr-16 text-[15px] shadow-inner focus-soft focus:border-indigo-400 transition border-hairline"
                           required
                         />
-                        <label className="pointer-events-none absolute left-10 top-1/2 -translate-y-1/2 text-gray-500 transition-all duration-200 peer-focus:-translate-y-4 peer-focus:text-xs peer-not-placeholder-shown:-translate-y-4 peer-not-placeholder-shown:text-xs">Password</label>
+                        <label className={`pointer-events-none absolute left-10 top-1/2 -translate-y-1/2 text-gray-500 transition-all duration-200 ${password ? '-translate-y-4 text-xs' : ''} peer-focus:-translate-y-4 peer-focus:text-xs`}>Password</label>
                         <button type="button" onClick={()=>setShowPassword(v=>!v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-600 hover:text-gray-800">{showPassword?'Hide':'Show'}</button>
                         {capsLockOn && <div className="mt-1 text-[11px] text-amber-700">Caps Lock is ON</div>}
                       </div>
@@ -281,7 +283,7 @@ export default function LoginPage() {
                         </label>
                         <a href="mailto:EduTrack46@gmail.com?subject=Password%20help" className="text-xs text-indigo-700 hover:underline">Forgot password?</a>
                       </div>
-                      <button type="submit" disabled={isLoading} className="w-full rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold py-3 disabled:opacity-60 shadow-md">{isLoading?'Signing In…':'Sign In'}</button>
+                      <button type="submit" disabled={isLoading} className="w-full rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold py-3 disabled:opacity-60 shadow-md transition-transform active:scale-[.99]">{isLoading?'Signing In…':'Sign In'}</button>
                     </form>
                   </div>
                 )}
@@ -294,7 +296,7 @@ export default function LoginPage() {
         {formStep === 'verifying' && (
           <div className="absolute inset-0 z-20 flex items-center justify-center">
             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm transition-opacity" />
-            <div className="relative bg-white/85 backdrop-blur-md rounded-2xl px-8 py-7 shadow-[0_20px_60px_rgba(0,0,0,0.35)] ring-1 ring-white/50 flex flex-col items-center gap-4" role="status" aria-busy="true" aria-live="polite">
+            <div className="relative bg-white/85 backdrop-blur-md rounded-2xl px-8 py-7 shadow-[0_20px_60px_rgba(0,0,0,0.35)] ring-1 ring-white/50 border-hairline flex flex-col items-center gap-4" role="status" aria-busy="true" aria-live="polite">
               <div className="relative w-24 h-24">
                 <div className="absolute inset-0 rounded-full border-2 border-black/10" />
                 <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-indigo-600 animate-spin" />
@@ -330,7 +332,7 @@ export default function LoginPage() {
           {/* Card with gradient border */}
           <div className="relative">
             <div className="absolute -inset-0.5 rounded-2xl bg-gradient-to-r from-indigo-500/40 via-purple-500/40 to-pink-500/40 blur opacity-75" />
-            <div className="relative bg-white/90 backdrop-blur rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.25)] ring-1 ring-white/60 p-4">
+            <div className="relative bg-white/90 backdrop-blur rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.25)] ring-1 ring-white/60 p-4 border-hairline">
             {formStep === 'role' && (
               <div>
                 <h2 className="text-lg font-bold text-indigo-700 mb-3">Select Your Role</h2>
@@ -366,7 +368,7 @@ export default function LoginPage() {
                 {error && <div className="mb-3 text-xs text-red-700 bg-red-100 border border-red-200 rounded px-2 py-1.5">{error}</div>}
                 <form onSubmit={submit} className="space-y-3">
                   <div>
-                    <label className="block text-[12px] text-gray-700 mb-1">Username</label>
+                    <label className="block text-[12px] text-gray-700 mb-1">Email (username)</label>
                     <input
                       type="text"
                       value={username}
@@ -374,6 +376,7 @@ export default function LoginPage() {
                       className="w-full rounded-lg border border-black/10 bg-white/80 px-3 py-2 text-sm"
                       required
                     />
+                    <div className="mt-1 text-[11px] text-gray-500">Admins: use the email you signed up with.</div>
                   </div>
                   <div>
                     <label className="block text-[12px] text-gray-700 mb-1">Password</label>

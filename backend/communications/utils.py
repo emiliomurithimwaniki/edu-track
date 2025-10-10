@@ -106,6 +106,11 @@ def send_sms(phone: str, message: str) -> bool:
     """
     if not phone or not message:
         return False
+    # Immediate loopback: if SMS_LOOPBACK is enabled, do not attempt any network calls
+    if getattr(settings, 'SMS_LOOPBACK', False):
+        logger.info("SMS_LOOPBACK enabled: simulating SMS send to %s", phone)
+        return True
+
     at_username = getattr(settings, 'AT_USERNAME', None)
     at_api_key = getattr(settings, 'AT_API_KEY', None)
     at_sender = getattr(settings, 'AT_SENDER_ID', None) or None

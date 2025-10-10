@@ -18,6 +18,7 @@ import TeacherAnalytics from './pages/TeacherAnalytics'
 import TeacherProfile from './pages/TeacherProfile'
 import TeacherLayout from './components/TeacherLayout'
 import StudentDashboard from './pages/StudentDashboard'
+import StudentReportCard from './pages/StudentReportCard'
 import StudentLayout from './components/StudentLayout'
 import FinanceDashboard from './pages/FinanceDashboard';
 import FinanceLayout from './components/FinanceLayout';
@@ -130,6 +131,7 @@ export default function App() {
           <Route path="/student" element={<ProtectedRoute roles={["student","admin"]}><StudentLayout><StudentDashboard/></StudentLayout></ProtectedRoute>} />
           <Route path="/student/messages" element={<ProtectedRoute roles={["student","admin"]}><StudentLayout><Messages/></StudentLayout></ProtectedRoute>} />
           <Route path="/student/academics" element={<ProtectedRoute roles={["student","admin"]}><StudentLayout><StudentDashboard/></StudentLayout></ProtectedRoute>} />
+          <Route path="/student/report-card" element={<ProtectedRoute roles={["student","admin"]}><StudentLayout><StudentReportCard/></StudentLayout></ProtectedRoute>} />
           <Route path="/student/finance" element={<ProtectedRoute roles={["student","admin"]}><StudentLayout><StudentDashboard/></StudentLayout></ProtectedRoute>} />
           <Route path="/finance" element={<ProtectedRoute roles={["finance","admin"]}><FinanceLayout><FinanceDashboard/></FinanceLayout></ProtectedRoute>} />
           <Route path="/finance/messages" element={<ProtectedRoute roles={["finance","admin"]}><FinanceLayout><Messages/></FinanceLayout></ProtectedRoute>} />

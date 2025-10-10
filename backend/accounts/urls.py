@@ -1,6 +1,6 @@
 from django.urls import path
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from .views import me, users, create_user, update_user_status, reset_password, school_me, update_user, change_password, school_info
+from .views import me, users, create_user, update_user_status, reset_password, school_me, update_user, change_password, school_info, trial_signup, verify_email
 
 urlpatterns = [
     path('token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
@@ -14,4 +14,6 @@ urlpatterns = [
     path('users/change_password/', change_password, name='users-change-password'),
     path('school/me/', school_me, name='school-me'),
     path('school/info/', school_info, name='school-info'),
+    path('trial-signup/', trial_signup, name='trial-signup'),
+    path('verify-email/', verify_email, name='verify-email'),
 ]

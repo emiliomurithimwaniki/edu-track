@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import AdminLayout from '../components/AdminLayout'
+import Modal from '../components/Modal'
 import api from '../api'
 
 export default function AdminStudentDashboard() {
@@ -13,6 +14,20 @@ export default function AdminStudentDashboard() {
   const [error, setError] = useState('')
   const [finance, setFinance] = useState({ total_billed: 0, total_paid: 0, balance: 0 })
   const [uploading, setUploading] = useState(false)
+  const [classes, setClasses] = useState([])
+  const [showEdit, setShowEdit] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [editErr, setEditErr] = useState('')
+  const [form, setForm] = useState({
+    name: '',
+    dob: '',
+    gender: '',
+    klass: '',
+    guardian_id: '',
+    email: '',
+    address: '',
+    passport_no: ''
+  })
 
   useEffect(() => {
     let isMounted = true
@@ -20,12 +35,13 @@ export default function AdminStudentDashboard() {
       try {
         setLoading(true)
         setError('')
-        const [st, asRes, atRes, exRes, fin] = await Promise.all([
+        const [st, asRes, atRes, exRes, fin, cl] = await Promise.all([
           api.get(`/academics/students/${id}/`),
           api.get(`/academics/assessments/?student=${id}`),
           api.get(`/academics/attendance/?student=${id}`),
           api.get(`/academics/exam_results/?student=${id}`),
           api.get(`/finance/invoices/student-summary?student=${id}`),
+          api.get('/academics/classes/')
         ])
         if (!isMounted) return
         setStudent(st.data)
@@ -33,6 +49,7 @@ export default function AdminStudentDashboard() {
         setAttendance(atRes.data)
         setExamResults(exRes.data)
         setFinance(fin.data)
+        setClasses(cl.data)
       } catch (e) {
         if (!isMounted) return
         setError(e?.response?.data?.detail || e?.message || 'Failed to load student dashboard')
@@ -66,6 +83,49 @@ export default function AdminStudentDashboard() {
     return `${k.name} • ${k.grade_level}`
   }, [student])
 
+  function openEdit(){
+    if (!student) return
+    setEditErr('')
+    setForm({
+      name: student.name || '',
+      dob: student.dob || '',
+      gender: student.gender || '',
+      klass: student.klass || student.klass_detail?.id || '',
+      guardian_id: student.guardian_id || '',
+      email: student.email || '',
+      address: student.address || '',
+      passport_no: student.passport_no || ''
+    })
+    setShowEdit(true)
+  }
+
+  async function saveEdit(e){
+    e?.preventDefault?.()
+    try{
+      setSaving(true)
+      setEditErr('')
+      const payload = {
+        name: form.name,
+        dob: form.dob,
+        gender: form.gender,
+        guardian_id: form.guardian_id,
+        email: form.email,
+        address: form.address,
+        passport_no: form.passport_no,
+        klass: form.klass || null
+      }
+      await api.patch(`/academics/students/${id}/`, payload)
+      const { data } = await api.get(`/academics/students/${id}/`)
+      setStudent(data)
+      setShowEdit(false)
+    } catch(err){
+      const msg = err?.response?.data ? JSON.stringify(err.response.data) : (err?.message || 'Failed to update student')
+      setEditErr(msg)
+    } finally{
+      setSaving(false)
+    }
+  }
+
   function money(n){
     try {
       const val = Number(n || 0)
@@ -94,7 +154,7 @@ export default function AdminStudentDashboard() {
         )}
 
         {/* Quick actions */}
-        <div className="flex items-center justify-end">
+        <div className="flex items-center justify-end gap-2">
           <Link
             to={`/admin/students/${id}/payments`}
             className="inline-flex items-center gap-2 px-3 py-2 rounded bg-green-600 text-white hover:bg-green-700"
@@ -102,6 +162,13 @@ export default function AdminStudentDashboard() {
             <span>➕</span>
             <span>Make Payment</span>
           </Link>
+          <button
+            onClick={openEdit}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+          >
+            <span>✏️</span>
+            <span>Edit Details</span>
+          </button>
         </div>
 
         {/* Summary cards */}
@@ -274,6 +341,63 @@ export default function AdminStudentDashboard() {
           )}
         </div>
       </div>
+      {/* Edit Student Modal */}
+      <Modal open={showEdit} onClose={()=>setShowEdit(false)} title="Edit Student Details" size="lg">
+        <form onSubmit={saveEdit} className="space-y-4">
+          {editErr && (
+            <div className="bg-red-50 border border-red-200 rounded p-2 text-sm text-red-700">{editErr}</div>
+          )}
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Full Name</label>
+              <input className="w-full border rounded px-3 py-2" value={form.name} onChange={e=>setForm({...form, name:e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Class</label>
+              <select className="w-full border rounded px-3 py-2" value={form.klass} onChange={e=>setForm({...form, klass:e.target.value})}>
+                <option value="">Not Assigned</option>
+                {classes.map(c => (
+                  <option key={c.id} value={c.id}>{c.name} - {c.grade_level}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Gender</label>
+              <select className="w-full border rounded px-3 py-2" value={form.gender} onChange={e=>setForm({...form, gender:e.target.value})}>
+                <option value="">Select</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Date of Birth</label>
+              <input type="date" className="w-full border rounded px-3 py-2" value={form.dob} onChange={e=>setForm({...form, dob:e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Guardian Phone</label>
+              <input className="w-full border rounded px-3 py-2" value={form.guardian_id} onChange={e=>setForm({...form, guardian_id:e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Email</label>
+              <input type="email" className="w-full border rounded px-3 py-2" value={form.email} onChange={e=>setForm({...form, email:e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Passport No</label>
+              <input className="w-full border rounded px-3 py-2" value={form.passport_no} onChange={e=>setForm({...form, passport_no:e.target.value})} />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm text-gray-700 mb-1">Address</label>
+              <input className="w-full border rounded px-3 py-2" value={form.address} onChange={e=>setForm({...form, address:e.target.value})} />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={()=>setShowEdit(false)} className="px-4 py-2 border rounded">Cancel</button>
+            <button type="submit" disabled={saving} className="px-5 py-2 rounded text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60">
+              {saving ? 'Saving...' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </Modal>
     </AdminLayout>
   )
 }

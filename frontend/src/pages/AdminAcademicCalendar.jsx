@@ -80,7 +80,40 @@ export default function AdminAcademicCalendar(){
 
   const setCurrentYearAction = async (id) => {
     try {
-      await api.post(`/academics/academic_years/${id}/set-current/`)
+      // Ask admin whether to promote students while setting current year
+      const promote = window.confirm('Set this year as current and promote students to next grade?\n\nNote: Grade 9 students will be marked as Graduated and removed from classes.')
+      const payload = promote ? { promote: true } : { promote: false }
+      const res = await api.post(`/academics/academic_years/${id}/set-current/`, payload)
+      if (res?.data?.promoted) {
+        alert('Academic year set and promotion completed.')
+      }
+      await load()
+    } catch (e) {
+      alert(e?.response?.data ? JSON.stringify(e.response.data) : e.message)
+    }
+  }
+
+  const promoteYear = async (id) => {
+    if (!window.confirm('Promote classes/students for this academic year now?\n\nNote: Grade 9 students will be marked as Graduated and removed from classes.')) return
+    try {
+      const res = await api.post(`/academics/academic_years/${id}/promote/`)
+      const s = res?.data?.summary
+      if (s) {
+        const lines = []
+        lines.push('Promotion completed.')
+        lines.push(`Graduated classes: ${s.graduated_classes?.length || 0}`)
+        lines.push(`Moved classes: ${s.moved_classes?.length || 0}`)
+        lines.push(`Renamed classes: ${s.renamed_classes?.length || 0}`)
+        if ((s.skipped?.length || 0) > 0) {
+          lines.push(`Skipped: ${s.skipped.length} (see console for details)`) 
+          // Log details for debugging
+          // eslint-disable-next-line no-console
+          console.table(s.skipped)
+        }
+        alert(lines.join('\n'))
+      } else {
+        alert('Promotion completed.')
+      }
       await load()
     } catch (e) {
       alert(e?.response?.data ? JSON.stringify(e.response.data) : e.message)
@@ -221,7 +254,10 @@ export default function AdminAcademicCalendar(){
                     </div>
                     <div className="flex items-center gap-2">
                       {y.is_current ? (
-                        <span className="text-xs px-2 py-0.5 rounded bg-green-100 text-green-700">Current</span>
+                        <>
+                          <span className="text-xs px-2 py-0.5 rounded bg-green-100 text-green-700">Current</span>
+                          <button onClick={()=>promoteYear(y.id)} className="text-xs px-2 py-1 rounded border ml-2">Promote</button>
+                        </>
                       ) : (
                         <button onClick={()=>setCurrentYearAction(y.id)} className="text-xs px-2 py-1 rounded border">Set current</button>
                       )}
