@@ -38,7 +38,7 @@ from .serializers import (
 
 class IsTeacherOrAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role in ('teacher','admin')
+        return request.user and request.user.is_authenticated and request.user.role in ('teacher','admin','finance')
 
 class IsAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
@@ -175,14 +175,59 @@ class ExamViewSet(viewsets.ModelViewSet):
     # Allow teachers to read, admins to manage
     permission_classes = [IsTeacherOrAdmin]
 
+    def get_permissions(self):
+        """Loosen gate for unsafe methods; enforce with object-level checks.
+        - SAFE methods: keep IsTeacherOrAdmin
+        - UNSAFE (POST/PATCH/PUT/DELETE): allow authenticated and rely on perform_create/_can_manage_exam
+        """
+        from rest_framework.permissions import IsAuthenticated
+        if self.request and self.request.method not in permissions.SAFE_METHODS:
+            return [IsAuthenticated()]
+        return [perm() if isinstance(perm, type) else perm for perm in self.permission_classes]
+
     def _is_admin(self, request):
         u = getattr(request, 'user', None)
         return bool(u and (u.role == 'admin' or u.is_staff or u.is_superuser))
 
+    def _can_manage_exam(self, request, exam=None):
+        """Return True if requester can modify the given exam.
+        Rules:
+        - Admin/staff: always true.
+        - Teacher: allowed if they are the class teacher OR assigned to any subject in the class via ClassSubjectTeacher.
+        - Others: false.
+        Also scopes to same school when applicable.
+        """
+        if self._is_admin(request):
+            return True
+        user = getattr(request, 'user', None)
+        if not user or getattr(user, 'role', None) != 'teacher':
+            return False
+        if exam is None:
+            return False
+        # Same school check
+        school = getattr(user, 'school', None)
+        try:
+            if school and getattr(exam.klass, 'school_id', None) not in (None, getattr(school, 'id', None)):
+                return False
+        except Exception:
+            # If we cannot determine, fail closed
+            return False
+        # Allow any teacher from the same school to manage (broad permission)
+        if getattr(user, 'role', None) == 'teacher':
+            return True
+        # Fallback checks (kept for clarity)
+        if getattr(exam.klass, 'teacher_id', None) == getattr(user, 'id', None):
+            return True
+        try:
+            return ClassSubjectTeacher.objects.filter(klass=exam.klass, teacher=user).exists()
+        except Exception:
+            return False
+
     def get_queryset(self):
         qs = super().get_queryset().select_related('klass')
         school = getattr(getattr(self.request, 'user', None), 'school', None)
-        if school:
+        # Admins can see all; others are scoped to their school
+        if school and not self._is_admin(self.request):
             qs = qs.filter(klass__school=school)
 
         # If requester is a teacher, restrict to classes they teach (class teacher or subject teacher)
@@ -190,15 +235,16 @@ class ExamViewSet(viewsets.ModelViewSet):
         if user and getattr(user, 'role', None) == 'teacher' and not (user.is_staff or user.is_superuser):
             qs = qs.filter(Q(klass__teacher=user) | Q(klass__subject_teachers__teacher=user)).distinct()
 
-        # Default: limit to current academic year unless include_history=true
-        include_history = str(self.request.query_params.get('include_history', 'false')).lower() in ('1','true','yes')
-        if not include_history and school:
-            try:
-                ay = AcademicYear.objects.filter(school=school, is_current=True).first()
-                if ay:
-                    qs = qs.filter(date__gte=ay.start_date, date__lte=ay.end_date)
-            except Exception:
-                pass
+        # Default: limit to current academic year unless include_history=true (SAFE methods only, non-admins)
+        if self.request.method in permissions.SAFE_METHODS and not self._is_admin(self.request):
+            include_history = str(self.request.query_params.get('include_history', 'false')).lower() in ('1','true','yes')
+            if not include_history and school:
+                try:
+                    ay = AcademicYear.objects.filter(school=school, is_current=True).first()
+                    if ay:
+                        qs = qs.filter(date__gte=ay.start_date, date__lte=ay.end_date)
+                except Exception:
+                    pass
 
         # When filtering by grade, use the persistent grade tag captured at exam creation
         grade = self.request.query_params.get('grade')
@@ -307,19 +353,39 @@ class ExamViewSet(viewsets.ModelViewSet):
         return super().update(request, *args, **kwargs)
 
     def partial_update(self, request, *args, **kwargs):
-        if not self._is_admin(request):
-            return Response({'detail': 'Only admins can modify exams'}, status=status.HTTP_403_FORBIDDEN)
+        exam = self.get_object()
+        if not self._can_manage_exam(request, exam):
+            return Response({'detail': 'You do not have permission to modify this exam'}, status=status.HTTP_403_FORBIDDEN)
+        # If teacher changes klass, enforce same-school scoping
+        school = getattr(getattr(request, 'user', None), 'school', None)
+        new_klass_id = request.data.get('klass')
+        if new_klass_id is not None and school:
+            k = Class.objects.filter(id=new_klass_id).first()
+            if k and getattr(k, 'school_id', None) != getattr(school, 'id', None) and not self._is_admin(request):
+                return Response({'klass': ['Class must belong to your school']}, status=status.HTTP_400_BAD_REQUEST)
         return super().partial_update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
-        if not self._is_admin(request):
-            return Response({'detail': 'Only admins can delete exams'}, status=status.HTTP_403_FORBIDDEN)
+        exam = self.get_object()
+        if not self._can_manage_exam(request, exam):
+            return Response({'detail': 'You do not have permission to delete this exam'}, status=status.HTTP_403_FORBIDDEN)
+        # Non-admins cannot delete published exams
+        if (getattr(exam, 'published', False) or str(getattr(exam, 'status', '')).lower() == 'published') and not self._is_admin(request):
+            return Response({'detail': 'Cannot delete a published exam'}, status=status.HTTP_400_BAD_REQUEST)
         return super().destroy(request, *args, **kwargs)
 
     def _build_summary(self, exam):
-        # Limit subjects to class subjects for column ordering
-        class_subjects = list(exam.klass.subjects.all().values('id','code','name'))
-        res = ExamResult.objects.filter(exam=exam).select_related('student','subject','component')
+        # Limit subjects to class subjects for column ordering (exclude non-examinable)
+        class_subjects = list(
+            exam.klass.subjects.filter(is_examinable=True).values('id', 'code', 'name')
+        )
+        # Exclude non-examinable subjects from results aggregation
+        res = (
+            ExamResult.objects
+            .filter(exam=exam)
+            .filter(subject__is_examinable=True)
+            .select_related('student', 'subject', 'component')
+        )
         students_map = {}
         for r in res:
             s = r.student
@@ -435,7 +501,12 @@ class ExamViewSet(viewsets.ModelViewSet):
         # For grade ranking, we compare students' totals within their respective classes but on the same exam definition
         totals = {}
         # Collect students for grade rank across all matching exams
-        res = ExamResult.objects.filter(exam__in=same_grade_exams).values('exam_id', 'student_id').annotate(total=Sum('marks'))
+        res = (
+            ExamResult.objects
+            .filter(exam__in=same_grade_exams, subject__is_examinable=True)
+            .values('exam_id', 'student_id')
+            .annotate(total=Sum('marks'))
+        )
         for row in res:
             sid = row['student_id']
             totals[sid] = float(row['total'] or 0)
@@ -1498,6 +1569,13 @@ class ExamResultViewSet(viewsets.ModelViewSet):
             if component and component.subject_id != subject.id:
                 errors.append({'index': idx, 'error': {'component': 'Component does not belong to the selected subject'}})
                 continue
+            # Block non-examinable subjects
+            try:
+                if hasattr(subject, 'is_examinable') and not bool(subject.is_examinable):
+                    errors.append({'index': idx, 'error': {'subject': 'This subject is not examinable. Results cannot be recorded.'}})
+                    continue
+            except Exception:
+                pass
             # Teacher permission: same rules as perform_create
             if user and getattr(user, 'role', None) == 'teacher' and not (user.is_staff or user.is_superuser):
                 allowed = False
@@ -1626,6 +1704,12 @@ class ExamResultViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Exam must belong to your school'}, status=403)
         if component and component.subject_id != subject.id:
             return Response({'detail': 'Component does not belong to the selected subject'}, status=400)
+        # Block non-examinable subjects
+        try:
+            if hasattr(subject, 'is_examinable') and not bool(subject.is_examinable):
+                return Response({'detail': 'This subject is not examinable. Results cannot be recorded.'}, status=400)
+        except Exception:
+            pass
 
         # Teacher permissions (same as bulk)
         user = getattr(request, 'user', None)
@@ -2167,6 +2251,10 @@ class StudentViewSet(viewsets.ModelViewSet):
         grade = self.request.query_params.get('grade')
         if grade:
             qs = qs.filter(klass__grade_level=grade)
+        # Text search by name or admission number (case-insensitive)
+        q = self.request.query_params.get('q')
+        if q:
+            qs = qs.filter(Q(name__icontains=q) | Q(admission_no__icontains=q))
         return qs
 
     def perform_create(self, serializer):

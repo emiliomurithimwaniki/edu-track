@@ -17,6 +17,7 @@ class Subject(models.Model):
     name = models.CharField(max_length=100)
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default="other")
     is_priority = models.BooleanField(default=False, help_text="If true, this subject is prioritized in timetable generation.")
+    is_examinable = models.BooleanField(default=True, help_text="If false, this subject is excluded from exams, results, and analytics.")
     school = models.ForeignKey('accounts.School', on_delete=models.CASCADE, null=True, blank=True)
     def __str__(self):
         return f"{self.code} - {self.name}"
@@ -154,9 +155,12 @@ class Class(models.Model):
         """Generate a consistent class name based on grade level and stream."""
         if not self.grade_level or not self.stream:
             return ""
-            
+        
         # Format the grade level
         formatted_grade = self.format_grade_level(self.grade_level)
+        # Special case: Graduated class should render as just 'Graduated'
+        if str(formatted_grade).strip().lower() == 'graduated':
+            return 'Graduated'
         
         # Return the class name in the format 'Grade X [Stream Name]'
         return f"{formatted_grade} {self.stream.name}".strip()
@@ -180,6 +184,30 @@ class Class(models.Model):
     def __str__(self):
         return self.name or f"Class object ({self.pk})"
 
+    @staticmethod
+    def get_or_create_graduated_class(school):
+        """Return a per-school special 'Graduated' class (not part of normal classes).
+        Creates a dedicated Stream named 'Graduated' if missing, and a Class with
+        grade_level='Graduated'. Name will render as 'Graduated'.
+        """
+        if not school:
+            return None
+        try:
+            # Ensure a 'Graduated' stream exists for this school
+            stream, _ = Stream.objects.get_or_create(school=school, name='Graduated')
+            # Class unique_together uses (grade_level, stream, school), so this is unique
+            klass, _ = Class.objects.get_or_create(
+                school=school,
+                stream=stream,
+                grade_level='Graduated',
+                defaults={
+                    'teacher': None,
+                }
+            )
+            return klass
+        except Exception:
+            return None
+
 class TeacherProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     subjects = models.CharField(max_length=255, blank=True)
@@ -192,6 +220,7 @@ class Student(models.Model):
     name = models.CharField(max_length=255)
     dob = models.DateField()
     gender = models.CharField(max_length=20)
+    upi_number = models.CharField(max_length=50, blank=True)
     guardian_id = models.CharField(max_length=100, blank=True)
     klass = models.ForeignKey(Class, null=True, on_delete=models.SET_NULL)
     user = models.OneToOneField(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
@@ -468,10 +497,25 @@ class AcademicYear(models.Model):
                                     grad_year = parts[-1]
                         except Exception:
                             grad_year = None
-                        # Graduate students one-by-one for reliability
+                        # Graduate students one-by-one, but block if fee balance > 0
                         moved_count = 0
+                        not_cleared = []
                         for stu in class_obj.student_set.select_for_update().all():
-                            stu.klass = None
+                            try:
+                                from finance.models import Invoice, Payment
+                                from django.db.models import Sum
+                                total_billed = Invoice.objects.filter(student=stu).aggregate(s=Sum('amount'))['s'] or 0
+                                total_paid = Payment.objects.filter(invoice__student=stu).aggregate(s=Sum('amount'))['s'] or 0
+                                balance = float(total_billed or 0) - float(total_paid or 0)
+                            except Exception:
+                                balance = 0
+                            if balance > 0:
+                                # Do NOT graduate; keep in class to allow clearance
+                                not_cleared.append({'student_id': stu.id, 'name': stu.name, 'balance': balance})
+                                continue
+                            # Move to the special 'Graduated' class for the school
+                            grad_class = Class.get_or_create_graduated_class(class_obj.school)
+                            stu.klass = grad_class
                             stu.is_graduated = True
                             stu.graduation_year = grad_year
                             stu.school = class_obj.school
@@ -483,6 +527,8 @@ class AcademicYear(models.Model):
                             'students': moved_count,
                             'graduation_year': grad_year,
                         })
+                        if not_cleared:
+                            summary.setdefault('not_cleared', []).extend(not_cleared)
                     else:
                         new_grade_num = current_grade_num + 1
                         # Check if a destination class already exists (same stream & school)

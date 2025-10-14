@@ -88,15 +88,15 @@ export default function AdminTeachers(){
         {/* Header */}
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Manage Teachers</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Manage Teachers</h1>
             <p className="text-sm text-gray-600">Create teacher accounts, assign subjects and class, and manage the directory.</p>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">{teachers.length} Teachers</span>
-            <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">{classes.length} Classes</span>
-            <Link to="/admin/subjects" className="px-3 py-1.5 rounded border hover:bg-gray-50">Subjects</Link>
-            <button onClick={()=>setShowCreateUser(true)} className="px-3 py-1.5 rounded bg-green-600 hover:bg-green-700 text-white">Create Teacher User</button>
-            <button onClick={()=>setShowAssign(true)} className="px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-700 text-white">Assign Subjects & Class</button>
+          <div className="flex items-center gap-2 overflow-x-auto md:overflow-visible py-1 -mx-1 px-1">
+            <span className="shrink-0 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">{teachers.length} Teachers</span>
+            <span className="shrink-0 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700">{classes.length} Classes</span>
+            <Link to="/admin/subjects" className="shrink-0 px-3 py-1.5 rounded border hover:bg-gray-50">Subjects</Link>
+            <button onClick={()=>setShowCreateUser(true)} className="shrink-0 px-3 py-1.5 rounded bg-green-600 hover:bg-green-700 text-white">Create Teacher User</button>
+            <button onClick={()=>setShowAssign(true)} className="shrink-0 px-3 py-1.5 rounded bg-indigo-600 hover:bg-indigo-700 text-white">Assign Subjects & Class</button>
           </div>
         </div>
 
@@ -137,14 +137,54 @@ export default function AdminTeachers(){
         </Modal>
 
         {/* Directory */}
-        <div className="bg-white rounded-xl shadow p-4 md:p-5">
+        <div className="bg-white rounded-2xl shadow-card border border-gray-200 p-4 md:p-5">
           <div className="flex items-center justify-between gap-3 mb-3">
-            <h2 className="font-semibold">Teachers Directory</h2>
-            <div className="flex items-center gap-2">
-              <input className="border p-2 rounded w-56" placeholder="Search name, subject or class" value={search} onChange={e=>setSearch(e.target.value)} />
+            <h2 className="text-base font-semibold">Teachers Directory</h2>
+            <div className="flex-1 md:flex-none md:w-auto">
+              <input className="w-full md:w-64 border p-2 rounded-lg" placeholder="Search name, subject or class" value={search} onChange={e=>setSearch(e.target.value)} />
             </div>
           </div>
-          <div className="overflow-x-auto rounded-lg border border-gray-100">
+          {/* Mobile cards */}
+          <div className="grid gap-2 md:hidden">
+            {loading ? (
+              <div className="py-6 text-center text-gray-500">Loading...</div>
+            ) : filteredTeachers.length === 0 ? (
+              <div className="py-6 text-center text-gray-500">No teachers found.</div>
+            ) : (
+              filteredTeachers.map(t => {
+                const subj = (t.subjects || '')
+                  .split(',')
+                  .map(s => s.trim())
+                  .filter(Boolean)
+                return (
+                  <Link key={t.id} to={`/admin/teachers/${t.id}`} className="flex items-center justify-between gap-3 p-3 rounded-xl border border-gray-200 hover:border-brand-200 hover:bg-brand-50/40 transition">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="h-10 w-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-semibold">
+                        {(t.user?.first_name?.[0] || t.user?.username?.[0] || '?').toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-medium truncate">{t.user?.first_name} {t.user?.last_name}</div>
+                        <div className="text-xs text-gray-500 truncate">@{t.user?.username}</div>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {subj.slice(0,3).map((s, idx) => (
+                            <span key={idx} className="px-2 py-0.5 rounded-full text-[11px] bg-purple-100 text-purple-700">{s}</span>
+                          ))}
+                          {subj.length>3 && <span className="text-[11px] text-gray-500">+{subj.length-3} more</span>}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="shrink-0">
+                      {t.klass_detail?.name ? (
+                        <span className="px-2 py-0.5 rounded-full text-xs bg-emerald-100 text-emerald-700">{t.klass_detail.name}</span>
+                      ) : <span className="text-xs text-gray-500">-</span>}
+                    </div>
+                  </Link>
+                )
+              })
+            )}
+          </div>
+          {/* Desktop table */}
+          <div className="hidden md:block overflow-x-auto rounded-lg border border-gray-100">
             <table className="w-full text-left text-sm">
               <thead className="bg-gray-50 text-gray-600">
                 <tr>

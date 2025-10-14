@@ -17,9 +17,10 @@ class EventSerializer(serializers.ModelSerializer):
         model = Event
         fields = [
             'id', 'school', 'title', 'description', 'location', 'start', 'end', 'all_day',
-            'audience', 'visibility', 'created_by', 'created_by_username', 'created_at', 'updated_at'
+            'audience', 'visibility', 'created_by', 'created_by_username', 'created_at', 'updated_at',
+            'completed', 'completed_at', 'completed_by', 'completion_comment'
         ]
-        read_only_fields = ['school', 'created_by', 'created_by_username', 'created_at', 'updated_at']
+        read_only_fields = ['school', 'created_by', 'created_by_username', 'created_at', 'updated_at', 'completed_at', 'completed_by']
 
     def get_created_by_username(self, obj):
         return getattr(obj.created_by, 'username', None)
@@ -106,8 +107,8 @@ class MessageSerializer(serializers.ModelSerializer):
                 # Will be re-checked on create
                 allowed = True
         elif role == 'finance':
-            # Finance can message admin and teachers
-            if audience == Message.Audience.ROLE and recipient_role in ('admin','teacher'):
+            # Finance can message admin, teachers, and students
+            if audience == Message.Audience.ROLE and recipient_role in ('admin','teacher','student'):
                 allowed = True
             elif audience == Message.Audience.USERS and recipient_ids:
                 allowed = True
@@ -172,7 +173,7 @@ class MessageSerializer(serializers.ModelSerializer):
         if role == 'teacher':
             recipients_qs = recipients_qs.filter(role='admin')
         elif role == 'finance':
-            recipients_qs = recipients_qs.filter(role__in=['admin','teacher'])
+            recipients_qs = recipients_qs.filter(role__in=['admin','teacher','student'])
         elif role == 'student':
             recipients_qs = recipients_qs.filter(role__in=['admin','finance'])
 

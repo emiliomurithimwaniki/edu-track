@@ -37,6 +37,26 @@ export default function FinancePocketMoney() {
     const [walletModalStudent, setWalletModalStudent] = useState(null);
     const [walletModalTx, setWalletModalTx] = useState([]);
     const [walletModalLoading, setWalletModalLoading] = useState(false);
+    const [studentsLoading, setStudentsLoading] = useState(false);
+
+    // helper to ensure students are loaded
+    const ensureStudents = async (pageSize=20000) => {
+        if (studentsLoading) return;
+        setStudentsLoading(true);
+        try{
+            const res = await api.get(`/academics/students/?page_size=${pageSize}`);
+            const payload = Array.isArray(res.data) ? res.data : (res.data?.results || []);
+            setStudents(payload);
+            // Also ensure wallets exist
+            try{
+                const have = new Set((wallets||[]).map(w=>w.student))
+                const missing = payload.filter(s=> !have.has(s.id))
+                for (const s of missing){ try { await api.post('/finance/pocket-money-wallets/', { student: s.id, balance: 0 }) } catch(_) {} }
+                if (missing.length){ const refreshed = await api.get('/finance/pocket-money-wallets/'); setWallets(refreshed.data) }
+            }catch(_){}
+        }catch(e){ /* ignore */ }
+        finally{ setStudentsLoading(false) }
+    }
 
     useEffect(() => {
         (async () => {
@@ -48,6 +68,18 @@ export default function FinancePocketMoney() {
                 setWallets(walletRes.data);
                 const studentsPayload = Array.isArray(studentRes.data) ? studentRes.data : (studentRes.data?.results || []);
                 setStudents(studentsPayload);
+                // Ensure every student has a wallet in the background
+                try {
+                    const have = new Set((walletRes.data||[]).map(w=>w.student))
+                    const missing = studentsPayload.filter(s=> !have.has(s.id))
+                    if (missing.length){
+                        for (const s of missing){
+                            try { await api.post('/finance/pocket-money-wallets/', { student: s.id, balance: 0 }) } catch(_) {}
+                        }
+                        const refreshed = await api.get('/finance/pocket-money-wallets/')
+                        setWallets(refreshed.data)
+                    }
+                } catch(_) {}
                 // Kick off transactions fetch but don't block first paint
                 fetchTransactions(1, pageSize, filterStudentId, filterType, dateFrom, dateTo, walletRes.data, studentsPayload);
             } catch (e) {
@@ -58,6 +90,20 @@ export default function FinancePocketMoney() {
         })();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // When opening the search modal, ensure students are loaded
+    useEffect(()=>{
+        if (!searchOpen) return;
+        if (students && students.length > 0) return;
+        ensureStudents(20000);
+    }, [searchOpen]);
+
+    // If user starts typing in inline selector and students haven't loaded, fetch them
+    useEffect(()=>{
+        if (studentQuery && (!students || students.length===0)) {
+            ensureStudents(20000);
+        }
+    }, [studentQuery]);
 
     // When filters or pagination change, reload transactions (debounced)
     const debounceRef = useRef(null);
@@ -298,6 +344,9 @@ export default function FinancePocketMoney() {
                 <button onClick={() => openTransactionForm(null, 'withdrawal')} className="px-4 py-2 rounded-lg text-sm font-medium bg-rose-600 text-white hover:bg-rose-700">
                     Withdraw
                 </button>
+                <button onClick={() => { setSearchOpen(true); setSearchQueryGlobal(''); }} className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800">
+                    Search
+                </button>
             </div>
             {/* Global Search modal */}
             {searchOpen && (
@@ -316,14 +365,23 @@ export default function FinancePocketMoney() {
                             className="w-full border border-gray-300 rounded-md py-2 px-3 text-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"
                         />
                         <div className="mt-3 max-h-80 overflow-auto border border-gray-200 rounded-md divide-y">
+                            {studentsLoading && (
+                                <div className="px-3 py-2 text-sm text-gray-500">Loading students...</div>
+                            )}
                             {students
                                 .filter(s => {
                                     const q = searchQueryGlobal.trim().toLowerCase();
                                     if (!q) return true;
-                                    return (
-                                        (s.admission_no || '').toLowerCase().includes(q) ||
-                                        (s.name || '').toLowerCase().includes(q)
-                                    );
+                                    const parts = [
+                                        s.admission_no,
+                                        s.name,
+                                        s.full_name,
+                                        s.first_name && s.last_name ? `${s.first_name} ${s.last_name}` : undefined,
+                                        s.first_name,
+                                        s.last_name,
+                                        s.klass_detail?.name,
+                                    ].filter(Boolean).join(' ').toLowerCase();
+                                    return parts.includes(q);
                                 })
                                 .slice(0, 200)
                                 .map(s => (
@@ -337,8 +395,8 @@ export default function FinancePocketMoney() {
                                         <div className="text-xs text-gray-500">Class: {s?.klass_detail?.name || '—'}</div>
                                     </button>
                                 ))}
-                            {students.length === 0 && (
-                                <div className="p-3 text-sm text-gray-500">No students loaded.</div>
+                            {(!studentsLoading && students.length === 0) && (
+                                <div className="p-3 text-sm text-gray-500">No students loaded. Please wait or refresh.</div>
                             )}
                         </div>
                     </div>
@@ -369,14 +427,23 @@ export default function FinancePocketMoney() {
                                     className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                                 />
                                 <div className="mt-2 max-h-40 overflow-auto border border-gray-200 rounded-md divide-y">
+                                    {studentsLoading && (
+                                        <div className="px-3 py-2 text-xs text-gray-500">Loading students...</div>
+                                    )}
                                     {students
                                         .filter(s => {
                                             const q = studentQuery.trim().toLowerCase();
                                             if (!q) return true;
-                                            return (
-                                                s.admission_no?.toLowerCase().includes(q) ||
-                                                s.name?.toLowerCase().includes(q)
-                                            );
+                                            const parts = [
+                                                s.admission_no,
+                                                s.name,
+                                                s.full_name,
+                                                s.first_name && s.last_name ? `${s.first_name} ${s.last_name}` : undefined,
+                                                s.first_name,
+                                                s.last_name,
+                                                s.klass_detail?.name,
+                                            ].filter(Boolean).join(' ').toLowerCase();
+                                            return parts.includes(q);
                                         })
                                         .map(s => (
                                             <button
@@ -388,6 +455,20 @@ export default function FinancePocketMoney() {
                                                 {s.admission_no} - {s.name}
                                             </button>
                                         ))}
+                                    {students && students.length>0 && students.filter(s=>{
+                                        const q = studentQuery.trim().toLowerCase();
+                                        if (!q) return false; return ![
+                                            s.admission_no,
+                                            s.name,
+                                            s.full_name,
+                                            s.first_name && s.last_name ? `${s.first_name} ${s.last_name}` : undefined,
+                                            s.first_name,
+                                            s.last_name,
+                                            s.klass_detail?.name,
+                                        ].filter(Boolean).join(' ').toLowerCase().includes(q)
+                                    }).length===students.length && (
+                                        <div className="px-3 py-2 text-xs text-gray-500">No matches. Try admission no or full name.</div>
+                                    )}
                                 </div>
                                 {selectedStudentId && (
                                     <p className="text-xs text-gray-500 mt-1">Selected student ID: {selectedStudentId}</p>

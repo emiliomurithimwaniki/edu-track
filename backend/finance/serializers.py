@@ -2,9 +2,52 @@ from rest_framework import serializers
 from .models import Invoice, Payment, FeeCategory, ClassFee, MpesaConfig, ExpenseCategory, Expense, PocketMoneyWallet, PocketMoneyTransaction
 
 class PaymentSerializer(serializers.ModelSerializer):
+    recorded_by_name = serializers.SerializerMethodField()
+    student = serializers.SerializerMethodField()
+
+    def get_recorded_by_name(self, obj):
+        user = getattr(obj, 'recorded_by', None)
+        if not user:
+            return None
+        # Try common name attributes in order of preference
+        for attr in ('name', 'full_name'):
+            val = getattr(user, attr, None)
+            if val:
+                return str(val)
+        # Try Django's get_full_name / get_username if available
+        try:
+            full = user.get_full_name()
+            if full:
+                return full
+        except Exception:
+            pass
+        try:
+            uname = user.get_username()
+            if uname:
+                return uname
+        except Exception:
+            pass
+        # Fallback to string representation
+        return str(user)
+
+    def get_student(self, obj):
+        try:
+            inv = getattr(obj, 'invoice', None)
+            stu = getattr(inv, 'student', None)
+            if not stu:
+                return None
+            return {
+                'id': getattr(stu, 'id', None),
+                'name': getattr(stu, 'name', None) or str(stu),
+                'admission_no': getattr(stu, 'admission_no', None),
+                'class': str(getattr(stu, 'klass', '') or ''),
+            }
+        except Exception:
+            return None
+
     class Meta:
         model = Payment
-        fields = ['id','invoice','amount','method','reference','attachment','invoice_id','created_at','recorded_by']
+        fields = ['id','invoice','amount','method','reference','attachment','invoice_id','created_at','recorded_by','recorded_by_name','student']
 
 class FeeCategorySerializer(serializers.ModelSerializer):
     class Meta:
@@ -28,6 +71,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
     payments = PaymentSerializer(many=True, read_only=True)
     category_detail = FeeCategorySerializer(source='category', read_only=True)
     class Meta:
+        model = Invoice
         fields = ['id','student','amount','status','category','category_detail','year','term','mpesa_transaction_id','due_date','created_at','payments']
 
 class MpesaConfigSerializer(serializers.ModelSerializer):

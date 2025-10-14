@@ -20,10 +20,37 @@ from django.utils import timezone
 
 User = get_user_model()
 
-@api_view(["GET"])
+@api_view(["GET","PATCH"]) 
 @permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def me(request):
-    return Response(UserSerializer(request.user).data)
+    """Get or update the authenticated user's profile.
+    PATCH accepts: first_name, last_name, email, phone and an optional avatar file under
+    any of the keys: 'profile_picture', 'avatar', or 'photo'.
+    """
+    user = request.user
+    if request.method == 'GET':
+        return Response(UserSerializer(user, context={"request": request}).data)
+
+    # PATCH update
+    data = request.data
+    changed_fields = []
+    for field in ("first_name","last_name","email","phone"):
+        if field in data and data.get(field) is not None:
+            setattr(user, field, data.get(field))
+            changed_fields.append(field)
+    # Accept avatar file under multiple common keys
+    file_key = None
+    for k in ("profile_picture","avatar","photo"):
+        if k in request.FILES:
+            file_key = k
+            break
+    if file_key:
+        user.profile_picture = request.FILES[file_key]
+        changed_fields.append('profile_picture')
+    if changed_fields:
+        user.save(update_fields=list(set(changed_fields)))
+    return Response(UserSerializer(user, context={"request": request}).data)
 
 
 @api_view(["GET"])

@@ -27,6 +27,8 @@ def create_default_subjects_for_school(sender, instance, created, **kwargs):
                 'category': category,
                 'is_priority': is_priority,
                 'school': instance,
+                # Mark P.P.I as non-examinable
+                'is_examinable': False if name.strip().lower() == 'p.p.i' else True,
             }
         )
 

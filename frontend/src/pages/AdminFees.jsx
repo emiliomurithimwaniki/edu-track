@@ -4,17 +4,17 @@ import api from '../api'
 import Modal from '../components/Modal'
 import { useNotification } from '../components/NotificationContext'
 
-export default function AdminFees(){
-  const [tab, setTab] = useState('categories') // categories | classFees | arrears
+export default function AdminFees({ embed=false, initialTab='categories' }){
+  const [tab, setTab] = useState(initialTab) // categories | classFees | arrears | payments
   const { showSuccess, showError } = useNotification()
-  const [counts, setCounts] = useState({ categories: null, classFees: null, arrears: null })
-  const [loadingCounts, setLoadingCounts] = useState({ categories: true, classFees: true, arrears: true })
+  const [counts, setCounts] = useState({ categories: null, classFees: null, arrears: null, payments: null })
+  const [loadingCounts, setLoadingCounts] = useState({ categories: true, classFees: true, arrears: true, payments: true })
   const onCount = (key, value) => setCounts(prev=>({ ...prev, [key]: value }))
   const onLoading = (key, value) => setLoadingCounts(prev=>({ ...prev, [key]: value }))
-  return (
-    <AdminLayout>
+  const content = (
       <div className="min-h-screen bg-gray-50">
         {/* Header Section */}
+
         <div className="bg-white shadow-sm border-b">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="py-6">
@@ -34,18 +34,19 @@ export default function AdminFees(){
         </div>
 
         {/* Tab Navigation */}
-        <div className="bg-white border-b">
+        <div className="bg-white border-b sticky top-0 z-20">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <nav className="flex space-x-8" aria-label="Tabs">
+            <nav className="flex gap-4 overflow-x-auto no-scrollbar py-1" aria-label="Tabs">
               {[
                 { id: 'categories', name: 'Fee Categories', icon: '📋' },
                 { id: 'classFees', name: 'Assign Class Fees', icon: '💰' },
-                { id: 'arrears', name: 'Balances & Arrears', icon: '📊' }
+                { id: 'arrears', name: 'Balances & Arrears', icon: '📊' },
+                { id: 'payments', name: 'Payment History', icon: '💳' },
               ].map((tabItem) => (
                 <button
                   key={tabItem.id}
                   onClick={() => setTab(tabItem.id)}
-                  className={`group relative py-4 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
+                  className={`shrink-0 group relative py-3 sm:py-4 px-1 border-b-2 font-medium text-sm transition-all duration-200 ${
                     tab === tabItem.id
                       ? 'border-blue-500 text-blue-600'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -61,10 +62,8 @@ export default function AdminFees(){
                         <div className={`w-3 h-2 rounded-sm ${tab === tabItem.id ? 'bg-blue-400' : 'bg-gray-400'}`} />
                       </div>
                     ) : (
-                      <span className={`inline-flex items-center justify-center w-6 h-4 text-xs font-semibold rounded-full ${
-                        tab === tabItem.id
-                          ? 'bg-blue-100 text-blue-800'
-                          : 'bg-gray-100 text-gray-600'
+                      <span className={`inline-flex items-center justify-center min-w-[1.5rem] h-5 px-1 text-[10px] font-semibold rounded-full ${
+                        tab === tabItem.id ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-600'
                       }`}>
                         {counts[tabItem.id] ?? 0}
                       </span>
@@ -86,10 +85,387 @@ export default function AdminFees(){
             {tab==='categories' && <FeeCategories showSuccess={showSuccess} showError={showError} onCount={(n)=>onCount('categories', n)} onLoading={(v)=>onLoading('categories', v)} />}
             {tab==='classFees' && <ClassFees showSuccess={showSuccess} showError={showError} onCount={(n)=>onCount('classFees', n)} onLoading={(v)=>onLoading('classFees', v)} />}
             {tab==='arrears' && <Arrears showSuccess={showSuccess} showError={showError} onCount={(n)=>onCount('arrears', n)} onLoading={(v)=>onLoading('arrears', v)} />}
+            {tab==='payments' && <PaymentHistory showSuccess={showSuccess} showError={showError} onCount={(n)=>onCount('payments', n)} onLoading={(v)=>onLoading('payments', v)} />}
           </div>
         </div>
       </div>
+  )
+  return embed ? content : (
+    <AdminLayout>
+      {content}
     </AdminLayout>
+  )
+}
+
+function PaymentHistory({ showError, onCount, onLoading }){
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [receiptOpen, setReceiptOpen] = useState(false)
+  const [receiptLoading, setReceiptLoading] = useState(false)
+  const [receiptData, setReceiptData] = useState(null)
+  const [filters, setFilters] = useState({ q:'', startDate:'', endDate:'' })
+  const [sortBy, setSortBy] = useState('date') // date | amount | invoice | method | recorder
+  const [sortDir, setSortDir] = useState('desc') // asc | desc
+  const load = async (params={}) => {
+    setLoading(true)
+    onLoading?.(true)
+    try {
+      const query = new URLSearchParams(params).toString()
+      const url = '/finance/payments/' + (query? `?${query}`:'')
+      const { data } = await api.get(url)
+      setItems(data)
+      onCount?.(data.length)
+    } catch (err) {
+      showError?.('Failed to Load Payments', err?.message || 'Failed')
+    } finally {
+      setLoading(false)
+      onLoading?.(false)
+    }
+  }
+  useEffect(()=>{ load() },[])
+
+  const applyFilters = (e) => {
+    e?.preventDefault?.()
+    const params = {}
+    if (filters.startDate) params.start_date = filters.startDate
+    if (filters.endDate) params.end_date = filters.endDate
+    load(params)
+  }
+
+  const clearFilters = () => {
+    setFilters({ q:'', startDate:'', endDate:'' })
+    load({})
+  }
+
+  const filtered = useMemo(()=>{
+    const q = filters.q.trim().toLowerCase()
+    if (!q) return items
+    return items.filter(p => {
+      const invoice = String(p.invoice || p.invoice_id || '').toLowerCase()
+      const method = String(p.method||'').toLowerCase()
+      const ref = String(p.reference||'').toLowerCase()
+      const rec = String(p.recorded_by_name || p.recorded_by || '').toLowerCase()
+      const amount = String(p.amount||'')
+      return invoice.includes(q) || method.includes(q) || ref.includes(q) || rec.includes(q) || amount.includes(q)
+    })
+  }, [items, filters.q])
+
+  const displayed = useMemo(()=>{
+    const arr = [...filtered]
+    const val = (p) => {
+      switch (sortBy) {
+        case 'amount': return Number(p.amount)||0
+        case 'invoice': return Number(p.invoice || p.invoice_id) || 0
+        case 'method': return String(p.method||'').toLowerCase()
+        case 'recorder': return String(p.recorded_by_name || p.recorded_by || '').toLowerCase()
+        case 'date':
+        default: return new Date(p.created_at).getTime() || 0
+      }
+    }
+    arr.sort((a,b)=>{
+      const av = val(a); const bv = val(b)
+      if (typeof av === 'number' && typeof bv === 'number') return av - bv
+      return String(av).localeCompare(String(bv))
+    })
+    if (sortDir === 'desc') arr.reverse()
+    return arr
+  }, [filtered, sortBy, sortDir])
+
+  const printResults = async () => {
+    try {
+      const params = {}
+      if (filters.startDate) params.start_date = filters.startDate
+      if (filters.endDate) params.end_date = filters.endDate
+      const { data } = await api.get('/finance/payments/export', { params, responseType: 'blob' })
+      const blob = new Blob([data], { type: 'text/csv;charset=utf-8;' })
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const date = new Date().toISOString().slice(0,10)
+      a.download = `payments_${filters.startDate||'all'}_${filters.endDate||date}.csv`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      showError?.('Failed to Export Payments', err?.message || 'Failed')
+    }
+  }
+
+  const viewReceipt = async (payment) => {
+    setReceiptOpen(true)
+    setReceiptLoading(true)
+    setReceiptData(null)
+    try {
+      const { data } = await api.get(`/finance/payments/${payment.id}/receipt/`)
+      setReceiptData(data)
+    } catch (err) {
+      showError?.('Failed to Load Receipt', err?.message || 'Failed')
+      setReceiptOpen(false)
+    } finally {
+      setReceiptLoading(false)
+    }
+  }
+
+  const printReceipt = () => {
+    if (!receiptData) return
+    const w = window.open('', '_blank', 'width=720,height=900')
+    const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>Receipt ${receiptData.receipt_no}</title>
+      <style>
+        :root{--bg:#0f172a;--primary:#2563eb;--muted:#6b7280;--border:#e5e7eb;--fg:#0b1220}
+        *{box-sizing:border-box}
+        body{margin:0;background:#f6f8fb;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial;color:var(--fg)}
+        .page{max-width:820px;margin:24px auto;padding:0 16px}
+        .card{background:#fff;border-radius:14px;box-shadow:0 8px 28px rgba(2,6,23,.06),0 2px 6px rgba(2,6,23,.06);overflow:hidden}
+        .brand{display:flex;align-items:center;justify-content:space-between;padding:20px 24px;background:linear-gradient(135deg,#f0f6ff,#ffffff)}
+        .brand-title{display:flex;align-items:center;gap:12px}
+        .logo{width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,var(--primary),#60a5fa);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700}
+        .school{font-size:18px;font-weight:800;letter-spacing:.2px}
+        .meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;color:var(--muted)}
+        .badge{background:#eef2ff;color:#3730a3;border:1px solid #e0e7ff;padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700}
+        .section{padding:18px 24px;border-top:1px solid var(--border)}
+        .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+        .label{font-size:12px;color:var(--muted);margin-bottom:6px}
+        .value{font-weight:600}
+        table{width:100%;border-collapse:separate;border-spacing:0 10px;margin-top:6px}
+        .row{background:#f9fafb;border:1px solid var(--border);border-radius:10px}
+        .row td{padding:12px 14px}
+        .total{background:#0ea5e914;color:#0b4a6f;border-color:#bae6fd;font-weight:800}
+        .right{text-align:right}
+        .footer{padding:18px 24px;color:var(--muted);font-size:12px}
+        @media print{body{background:#fff}.page{margin:0;max-width:none}.brand{background:#fff;border-bottom:1px solid var(--border)}.card{box-shadow:none;border:0;border-radius:0}}
+      </style></head><body>
+      <div class="page"><div class="card">
+        <div class="brand">
+          <div class="brand-title">
+            <div class="logo">ET</div>
+            <div>
+              <div class="school">${receiptData.school?.name || 'Receipt'}</div>
+              <div class="meta">${new Date(receiptData.date).toLocaleString()}</div>
+            </div>
+          </div>
+          <div class="badge">${receiptData.receipt_no}</div>
+        </div>
+        <div class="section">
+          <div class="grid">
+            <div>
+              <div class="label">Student</div>
+              <div class="value">${receiptData.student?.name || ''}</div>
+              <div class="meta">${receiptData.student?.class || ''} ${receiptData.student?.admission_no ? '• ADM '+receiptData.student.admission_no : ''}</div>
+            </div>
+            <div class="right">
+              <div class="label">Invoice</div>
+              <div class="value">#${receiptData.invoice}</div>
+              <div class="meta">Invoice Amount • KES ${(receiptData.invoice_amount||0).toLocaleString()}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <table>
+            <tbody>
+              <tr class="row"><td>Payment Method</td><td class="right">${receiptData.method}</td></tr>
+              <tr class="row"><td>Reference</td><td class="right">${receiptData.reference || '-'}</td></tr>
+              <tr class="row"><td>Invoice Paid (to date)</td><td class="right">KES ${(receiptData.invoice_paid||0).toLocaleString()}</td></tr>
+              <tr class="row"><td>Invoice Balance</td><td class="right">KES ${(receiptData.invoice_balance||0).toLocaleString()}</td></tr>
+              <tr class="row"><td>Student Balance</td><td class="right">KES ${(receiptData.student_balance||0).toLocaleString()}</td></tr>
+              <tr class="row total"><td>Total Paid</td><td class="right">KES ${(receiptData.amount||0).toLocaleString()}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="footer">This is a system generated receipt. Thank you for your payment.</div>
+      </div></div>
+      <script>window.onload=()=>{window.print();}</script>
+      </body></html>`
+    w.document.write(html)
+    w.document.close()
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white rounded-lg shadow-sm border p-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-indigo-100 rounded-lg">
+              <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+              </svg>
+            </div>
+            <h3 className="text-lg font-semibold text-gray-800">Payment History</h3>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              className="hidden sm:block px-2 py-1 text-sm border border-gray-300 rounded-md"
+              value={sortBy}
+              onChange={e=>setSortBy(e.target.value)}
+            >
+              <option value="date">Sort: Date</option>
+              <option value="amount">Sort: Amount</option>
+              <option value="invoice">Sort: Invoice</option>
+              <option value="method">Sort: Method</option>
+              <option value="recorder">Sort: Recorder</option>
+            </select>
+            <button onClick={()=>setSortDir(d=>d==='asc'?'desc':'asc')} className="hidden sm:inline-flex px-2 py-1 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50" title="Toggle sort direction">{sortDir==='asc'?'Asc':'Desc'}</button>
+            <button onClick={printResults} className="px-3 py-2 text-sm font-medium bg-white border border-gray-300 rounded-md hover:bg-gray-50">Print Results</button>
+            <div className="text-sm text-gray-500">
+              {loading ? (
+                <span className="inline-flex items-center gap-2"><div className="w-4 h-4 border-2 border-gray-300 border-t-indigo-500 rounded-full animate-spin"></div> Loading...</span>
+              ) : (
+                <span className="inline-flex items-center gap-1"><span className="font-semibold text-gray-900">{filtered.length}</span> payments</span>
+              )}
+            </div>
+          </div>
+        </div>
+        {/* Filters */}
+        <form onSubmit={applyFilters} className="mt-4 grid grid-cols-1 sm:grid-cols-5 gap-3">
+          <div className="sm:col-span-2">
+            <input
+              placeholder="Search (invoice, method, reference, recorder)"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              value={filters.q}
+              onChange={e=>setFilters({...filters, q:e.target.value})}
+            />
+          </div>
+          <div>
+            <input type="date" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500" value={filters.startDate} onChange={e=>setFilters({...filters, startDate:e.target.value})} />
+          </div>
+          <div>
+            <input type="date" className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500" value={filters.endDate} onChange={e=>setFilters({...filters, endDate:e.target.value})} />
+          </div>
+          <div className="flex gap-2">
+            <button className="px-3 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700">Apply Filters</button>
+            <button type="button" onClick={clearFilters} className="px-3 py-2 text-sm font-medium bg-white border border-gray-300 rounded-md hover:bg-gray-50">Clear</button>
+          </div>
+        </form>
+      </div>
+
+      <div className="bg-white rounded-lg shadow-sm border">
+        {/* Mobile cards */}
+        <div className="grid gap-2 md:hidden p-4">
+          {loading ? (
+            Array.from({length:3}).map((_,i)=>(
+              <div key={`p-m-${i}`} className="p-3 rounded-xl border border-gray-200 animate-pulse">
+                <div className="h-4 bg-gray-200 rounded w-1/3 mb-2"></div>
+                <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+              </div>
+            ))
+          ) : items.length === 0 ? (
+            <div className="p-6 text-center text-sm text-gray-500">No payments recorded.</div>
+          ) : (
+            items.slice(0,20).map(p => (
+              <div key={p.id} className="flex items-center justify-between gap-3 p-3 rounded-xl border border-gray-200">
+                <div className="min-w-0">
+                  <div className="font-medium truncate">KES {Number(p.amount).toLocaleString()} • {p.method}</div>
+                  <div className="text-xs text-gray-500 truncate">Inv #{p.invoice || p.invoice_id} • {new Date(p.created_at).toLocaleString()}</div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => viewReceipt(p)} className="text-blue-600 text-xs font-medium hover:underline">Receipt</button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Desktop table */}
+        <div className="hidden md:block overflow-x-auto">
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invoice</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Method</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reference</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Recorded By</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {loading ? (
+                Array.from({length:4}).map((_,i)=> (
+                  <tr key={`p-${i}`}>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded animate-pulse"></div></td>
+                    <td className="px-6 py-4"><div className="h-4 bg-gray-200 rounded animate-pulse"></div></td>
+                  </tr>
+                ))
+              ) : displayed.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="px-6 py-12 text-center text-sm text-gray-500">No payments found.</td>
+                </tr>
+              ) : (
+                displayed.slice(0, 200).map(p => (
+                  <tr key={p.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{new Date(p.created_at).toLocaleString()}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">#{p.invoice || p.invoice_id}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{p.method}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{p.reference || '-'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">KES {Number(p.amount).toLocaleString()}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{p.recorded_by_name || p.recorded_by || '-'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <button onClick={() => viewReceipt(p)} className="text-blue-600 hover:underline font-medium">Receipt</button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <Modal open={receiptOpen} onClose={()=>setReceiptOpen(false)} title={receiptData ? `Receipt ${receiptData.receipt_no}` : 'Receipt'}>
+        {receiptLoading ? (
+          <div className="p-4 text-sm text-gray-600">Loading receipt…</div>
+        ) : !receiptData ? (
+          <div className="p-4 text-sm text-red-600">Failed to load receipt.</div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="text-sm text-gray-500">Date</div>
+                <div className="font-medium">{new Date(receiptData.date).toLocaleString()}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-sm text-gray-500">Receipt No</div>
+                <div className="font-semibold">{receiptData.receipt_no}</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <div className="text-sm text-gray-500">Student</div>
+                <div className="font-medium">{receiptData.student?.name}</div>
+                <div className="text-sm text-gray-500">{receiptData.student?.class}</div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-500">Invoice</div>
+                <div className="font-medium">#{receiptData.invoice}</div>
+                <div className="text-sm text-gray-500">Invoice Amount: KES {(receiptData.invoice_amount||0).toLocaleString()}</div>
+              </div>
+            </div>
+            <div className="border rounded-md">
+              <div className="flex justify-between p-3 border-b text-sm">
+                <span>Method</span><span className="font-medium">{receiptData.method}</span>
+              </div>
+              <div className="flex justify-between p-3 border-b text-sm">
+                <span>Reference</span><span className="font-medium">{receiptData.reference || '-'}</span>
+              </div>
+              <div className="flex justify-between p-3 text-sm">
+                <span>Total Paid</span><span className="font-semibold">KES {(receiptData.amount||0).toLocaleString()}</span>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3">
+              <button onClick={()=>setReceiptOpen(false)} className="px-4 py-2 text-sm font-medium bg-white border border-gray-300 rounded-md hover:bg-gray-50">Close</button>
+              <button onClick={printReceipt} className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700">Print</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+    </div>
   )
 }
 
@@ -98,6 +474,9 @@ function FeeCategories({ showSuccess, showError, onCount, onLoading }){
   const [loading, setLoading] = useState(false)
   const [form, setForm] = useState({ name:'', description:'' })
   const [error, setError] = useState('')
+  const [editItem, setEditItem] = useState(null)
+  const [editForm, setEditForm] = useState({ name:'', description:'' })
+  const [savingEdit, setSavingEdit] = useState(false)
   const load = async () => {
     setLoading(true)
     onLoading?.(true)
@@ -122,6 +501,37 @@ function FeeCategories({ showSuccess, showError, onCount, onLoading }){
     } catch (err) {
       setError(err?.response?.data ? JSON.stringify(err.response.data) : (err?.message || 'Failed'))
       showError('Failed to Create Fee Category', 'There was an error creating the fee category. Please try again.')
+    }
+  }
+  const startEdit = (item) => {
+    setEditItem(item)
+    setEditForm({ name: item.name || '', description: item.description || '' })
+  }
+  const saveEdit = async (e) => {
+    e?.preventDefault?.()
+    if (!editItem) return
+    setSavingEdit(true)
+    try {
+      await api.put(`/finance/fee-categories/${editItem.id}/`, editForm)
+      showSuccess('Fee Category Updated', `"${editForm.name}" has been saved.`)
+      setEditItem(null)
+      setEditForm({ name:'', description:'' })
+      load()
+    } catch (err) {
+      showError('Failed to Update Fee Category', err?.response?.data ? JSON.stringify(err.response.data) : (err?.message || 'Failed'))
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+  const deleteItem = async (item) => {
+    if (!window.confirm(`Delete category "${item.name}"?`)) return
+    try {
+      await api.delete(`/finance/fee-categories/${item.id}/`)
+      showSuccess('Category Deleted', `"${item.name}" removed.`)
+      load()
+    } catch (err) {
+      const msg = err?.response?.data ? JSON.stringify(err.response.data) : (err?.message || 'Failed')
+      showError('Failed to Delete Category', msg)
     }
   }
   return (
@@ -234,55 +644,104 @@ function FeeCategories({ showSuccess, showError, onCount, onLoading }){
               <p className="mt-1 text-sm text-gray-500">Get started by creating your first fee category above.</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Description
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Created
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {items.map((item, index) => (
-                    <tr key={item.id} className={`hover:bg-gray-50 transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                            <span className="text-xs font-semibold text-blue-600">
-                              {item.name.charAt(0).toUpperCase()}
-                            </span>
-                          </div>
-                          <div className="text-sm font-medium text-gray-900">{item.name}</div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm text-gray-500 max-w-xs truncate">
-                          {item.description || <span className="italic text-gray-400">No description</span>}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        <div className="inline-flex items-center gap-1">
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
-                          Recently
-                        </div>
-                      </td>
+            <>
+              {/* Mobile cards */}
+              <div className="grid gap-2 md:hidden p-4">
+                {items.map((item) => (
+                  <div key={item.id} className="flex items-center justify-between gap-3 p-3 rounded-xl border border-gray-200">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center font-semibold">
+                        {item.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-medium truncate">{item.name}</div>
+                        <div className="text-xs text-gray-500 truncate">{item.description || 'No description'}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button onClick={() => startEdit(item)} className="text-blue-600 text-xs font-medium hover:underline">Edit</button>
+                      <button onClick={() => deleteItem(item)} className="text-red-600 text-xs font-medium hover:underline">Delete</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {items.map((item, index) => (
+                      <tr key={item.id} className={`hover:bg-gray-50 transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                              <span className="text-xs font-semibold text-blue-600">{item.name.charAt(0).toUpperCase()}</span>
+                            </div>
+                            <div className="text-sm font-medium text-gray-900">{item.name}</div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm text-gray-500 max-w-xs truncate">{item.description || <span className="italic text-gray-400">No description</span>}</div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          <div className="inline-flex items-center gap-1">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            </svg>
+                            Recently
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          <div className="flex items-center gap-4">
+                            <button onClick={() => startEdit(item)} className="text-blue-600 hover:underline font-medium">Edit</button>
+                            <button onClick={() => deleteItem(item)} className="text-red-600 hover:underline font-medium">Delete</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       </div>
+
+      {editItem && (
+        <Modal open={!!editItem} onClose={() => setEditItem(null)} title="Edit Fee Category">
+          <form onSubmit={saveEdit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Category Name</label>
+              <input
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                value={editForm.name}
+                onChange={e=>setEditForm({...editForm, name:e.target.value})}
+                required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
+              <input
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                value={editForm.description}
+                onChange={e=>setEditForm({...editForm, description:e.target.value})}
+              />
+            </div>
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setEditItem(null)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">Cancel</button>
+              <button disabled={savingEdit} className={`px-4 py-2 text-sm font-medium rounded-md ${savingEdit ? 'bg-gray-300 text-gray-600' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>{savingEdit ? 'Saving...' : 'Save Changes'}</button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </div>
   )
 }
@@ -298,6 +757,11 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
   const [showPreview, setShowPreview] = useState(false)
   const [selectedClasses, setSelectedClasses] = useState([])
   const [assignmentMode, setAssignmentMode] = useState('single') // 'single' or 'multiple'
+  const [moreOpen, setMoreOpen] = useState(false)
+  const [showForm, setShowForm] = useState(false)
+  const [editCF, setEditCF] = useState(null)
+  const [editForm, setEditForm] = useState({ amount:'', due_date:'', year:'', term:'' })
+  const [savingEdit, setSavingEdit] = useState(false)
 
   // Filter classes based on search term
   const filteredClasses = useMemo(() => {
@@ -363,13 +827,67 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
     return form.klasses.length
   }
 
+  const startEditCF = (cf) => {
+    setEditCF(cf)
+    setEditForm({
+      amount: cf.amount || '',
+      due_date: cf.due_date || '',
+      year: cf.year || '',
+      term: cf.term || '',
+    })
+  }
+
+  const saveEditCF = async (e) => {
+    e?.preventDefault?.()
+    if (!editCF) return
+    setSavingEdit(true)
+    try {
+      const payload = {
+        amount: parseFloat(editForm.amount),
+        year: editForm.year,
+        term: editForm.term,
+        due_date: editForm.due_date || null,
+        fee_category: editCF.fee_category, // keep same category
+        klass: editCF.klass, // keep same class
+      }
+      await api.put(`/finance/class-fees/${editCF.id}/`, payload)
+      showSuccess?.('Fee Assignment Updated', 'The class fee assignment has been updated.')
+      setEditCF(null)
+      setSavingEdit(false)
+      load()
+    } catch (err) {
+      setSavingEdit(false)
+      showError?.('Failed to Update', err?.response?.data ? JSON.stringify(err.response.data) : (err?.message || 'Failed'))
+    }
+  }
+
+  const deleteCF = async (cf) => {
+    if (!window.confirm('Delete this fee assignment? This cannot be undone.')) return
+    try {
+      await api.delete(`/finance/class-fees/${cf.id}/`)
+      showSuccess?.('Deleted', 'Fee assignment deleted.')
+      load()
+    } catch (err) {
+      showError?.('Failed to Delete', err?.response?.data ? JSON.stringify(err.response.data) : (err?.message || 'Failed'))
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Assignment Form */}
       <div className="bg-white rounded-lg shadow-sm border p-6">
-        <h3 className="text-lg font-semibold mb-6 text-gray-800">Fee Assignment Details</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold text-gray-800">Fee Assignment Details</h3>
+          <button
+            type="button"
+            onClick={()=>setShowForm(v=>!v)}
+            className="px-3 py-1.5 text-sm font-medium bg-white border border-gray-300 rounded-md hover:bg-gray-50"
+          >
+            {showForm ? 'Hide Form' : 'New Assignment'}
+          </button>
+        </div>
 
-        {error && (
+        {showForm && error && (
           <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-md">
             <div className="flex items-center gap-2">
               <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -381,6 +899,7 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
           </div>
         )}
 
+        {showForm && (
         <form onSubmit={create} className="space-y-6">
           {/* Assignment Mode Selection */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -389,7 +908,7 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
                 Assignment Mode
               </label>
               <div className="grid grid-cols-2 gap-3">
-                <label className={`relative flex cursor-pointer rounded-lg border py-3 px-4 ${assignmentMode === 'single' ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}>
+                <label className={`relative flex cursor-pointer rounded-lg border py-2.5 px-3 ${assignmentMode === 'single' ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}>
                   <input
                     type="radio"
                     name="assignmentMode"
@@ -405,7 +924,7 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
                     <span className="text-sm font-medium">Single Class</span>
                   </div>
                 </label>
-                <label className={`relative flex cursor-pointer rounded-lg border py-3 px-4 ${assignmentMode === 'multiple' ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}>
+                <label className={`relative flex cursor-pointer rounded-lg border py-2.5 px-3 ${assignmentMode === 'multiple' ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}`}>
                   <input
                     type="radio"
                     name="assignmentMode"
@@ -599,13 +1118,40 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
             </button>
 
             <div className="flex gap-3">
+            <div className="relative">
               <button
                 type="button"
-                onClick={() => setShowPreview(!showPreview)}
-                className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                onClick={()=>setMoreOpen(v=>!v)}
+                className="px-3 py-2 text-sm font-medium bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none"
               >
-                {showPreview ? 'Hide' : 'Show'} Preview
+                More ▾
               </button>
+              {moreOpen && (
+                <div className="absolute right-0 mt-2 w-44 bg-white border border-gray-200 rounded-md shadow-lg z-10">
+                  <button
+                    type="button"
+                    onClick={()=>{ setShowPreview(v=>!v); setMoreOpen(false) }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                  >
+                    {showPreview ? 'Hide Preview' : 'Show Preview'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={()=>{ resetForm(); setMoreOpen(false) }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                  >
+                    Reset Form
+                  </button>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPreview(!showPreview)}
+              className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+            >
+              {showPreview ? 'Hide' : 'Show'} Preview
+            </button>
 
               <button
                 disabled={!form.fee_category || !form.amount || !form.year || !form.term || getSelectedClassCount() === 0}
@@ -620,8 +1166,8 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
             </div>
           </div>
         </form>
+        )}
       </div>
-
       {/* Preview Section */}
       {showPreview && (
         <div className="bg-white rounded-lg shadow-sm border p-6">
@@ -698,7 +1244,39 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        {/* Mobile cards */}
+        <div className="grid gap-2 md:hidden">
+          {loading ? (
+            Array.from({length: 3}).map((_, i) => (
+              <div key={`loading-m-${i}`} className="p-3 rounded-xl border border-gray-200 animate-pulse">
+                <div className="h-4 bg-gray-200 rounded w-1/3 mb-2"></div>
+                <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+              </div>
+            ))
+          ) : classFees.length === 0 ? (
+            <div className="p-6 text-center text-sm text-gray-500">No fee assignments found.</div>
+          ) : (
+            classFees.slice(0,10).map(cf => (
+              <div key={cf.id} className="flex items-center justify-between gap-3 p-3 rounded-xl border border-gray-200">
+                <div className="min-w-0">
+                  <div className="font-medium truncate">{cf.fee_category_detail?.name || cf.fee_category}</div>
+                  <div className="text-xs text-gray-500 truncate">{cf.klass_detail || cf.klass} • {cf.year} • T{cf.term}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-sm font-semibold text-gray-900">KES {Number(cf.amount).toLocaleString()}</div>
+                  <div className="text-[11px] text-gray-500">Due {cf.due_date || '-'}</div>
+                  <div className="mt-2 flex items-center gap-3 text-xs">
+                    <button onClick={()=>startEditCF(cf)} className="text-blue-600 hover:underline font-medium">Edit</button>
+                    <button onClick={()=>deleteCF(cf)} className="text-red-600 hover:underline font-medium">Delete</button>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Desktop table */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
@@ -708,6 +1286,7 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Term</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Due Date</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -724,26 +1303,22 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
                 ))
               ) : classFees.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="px-6 py-12 text-center text-sm text-gray-500">
-                    No fee assignments found. Create your first assignment above.
-                  </td>
+                  <td colSpan="6" className="px-6 py-12 text-center text-sm text-gray-500">No fee assignments found. Create your first assignment above.</td>
                 </tr>
               ) : (
                 classFees.slice(0, 10).map(cf => (
                   <tr key={cf.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {cf.fee_category_detail?.name || cf.fee_category}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {cf.klass_detail || cf.klass}
-                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{cf.fee_category_detail?.name || cf.fee_category}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{cf.klass_detail || cf.klass}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{cf.year}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">Term {cf.term}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">
-                      KES {Number(cf.amount).toLocaleString()}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {cf.due_date || '-'}
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-medium">KES {Number(cf.amount).toLocaleString()}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{cf.due_date || '-'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <div className="flex items-center gap-4">
+                        <button onClick={()=>startEditCF(cf)} className="text-blue-600 hover:underline font-medium">Edit</button>
+                        <button onClick={()=>deleteCF(cf)} className="text-red-600 hover:underline font-medium">Delete</button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -751,6 +1326,63 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
             </tbody>
           </table>
         </div>
+
+        {/* Edit Modal */}
+        {editCF && (
+          <Modal open={!!editCF} onClose={()=>setEditCF(null)} title="Edit Fee Assignment">
+            <form onSubmit={saveEditCF} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Amount (KES)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    value={editForm.amount}
+                    onChange={e=>setEditForm({...editForm, amount:e.target.value})}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Due Date</label>
+                  <input
+                    type="date"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    value={editForm.due_date || ''}
+                    onChange={e=>setEditForm({...editForm, due_date:e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Year</label>
+                  <input
+                    type="number"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    value={editForm.year}
+                    onChange={e=>setEditForm({...editForm, year:e.target.value})}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Term</label>
+                  <select
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    value={editForm.term}
+                    onChange={e=>setEditForm({...editForm, term:e.target.value})}
+                    required
+                  >
+                    <option value="1">Term 1</option>
+                    <option value="2">Term 2</option>
+                    <option value="3">Term 3</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex justify-end gap-3">
+                <button type="button" onClick={()=>setEditCF(null)} className="px-4 py-2 text-sm font-medium bg-white border border-gray-300 rounded-md hover:bg-gray-50">Cancel</button>
+                <button disabled={savingEdit} className={`px-4 py-2 text-sm font-medium rounded-md ${savingEdit ? 'bg-gray-300 text-gray-600' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>{savingEdit ? 'Saving…' : 'Save Changes'}</button>
+              </div>
+            </form>
+          </Modal>
+        )}
       </div>
     </div>
   )
@@ -761,6 +1393,7 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
   const [items, setItems] = useState([])
   const [klass, setKlass] = useState('')
   const [minBalance, setMinBalance] = useState('')
+  const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [notifyOpen, setNotifyOpen] = useState(false)
   const [notifyMsg, setNotifyMsg] = useState('Dear Parent/Guardian of {student_name} ({class}), your outstanding balance is {balance}. Kindly clear at the earliest. Thank you.')
@@ -770,6 +1403,10 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
   const [emailSubject, setEmailSubject] = useState('School Fees Arrears')
   const [sending, setSending] = useState(false)
   const [resultMsg, setResultMsg] = useState('')
+  const [payOpen, setPayOpen] = useState(false)
+  const [payLoading, setPayLoading] = useState(false)
+  const [payStudent, setPayStudent] = useState(null)
+  const [payForm, setPayForm] = useState({ amount:'', method:'cash', reference:'' })
 
   const load = async (params={}) => {
     setLoading(true)
@@ -799,7 +1436,63 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
     load(params)
   }
 
+  const openPayForStudent = async (studentItem) => {
+    setPayStudent(studentItem)
+    setPayOpen(true)
+    // No server fetch needed; default amount to student's balance
+    setPayForm(f => ({ ...f, amount: studentItem.balance || '' }))
+  }
+
+  const submitPayment = async (e) => {
+    e.preventDefault()
+    if (!payForm.amount || !payStudent?.student_id) return
+    try {
+      await api.post(`/finance/invoices/pay_student/`, {
+        student: payStudent.student_id,
+        amount: parseFloat(payForm.amount),
+        method: payForm.method,
+        reference: payForm.reference,
+      })
+      showSuccess?.('Payment Recorded', 'The payment has been recorded successfully.')
+      setPayOpen(false)
+      setPayForm({ amount:'', method:'cash', reference:'' })
+      // refresh arrears
+      filter(new Event('submit'))
+    } catch (err) {
+      showError?.('Failed to Record Payment', err?.response?.data ? JSON.stringify(err.response.data) : (err?.message || 'Failed'))
+    }
+  }
+
   const totalArrears = useMemo(()=> items.reduce((s, it) => s + (it.balance||0), 0), [items])
+  const filteredItems = useMemo(()=>{
+    const q = query.trim().toLowerCase()
+    if (!q) return items
+    return items.filter(it =>
+      String(it.student_name||'').toLowerCase().includes(q) ||
+      String(it.class||'').toLowerCase().includes(q) ||
+      String(it.balance||'').includes(q)
+    )
+  }, [items, query])
+
+  const printArrears = async () => {
+    try {
+      const params = {}
+      if (klass) params.klass = klass
+      if (minBalance) params.min_balance = minBalance
+      const { data } = await api.get('/finance/invoices/arrears/export', { params, responseType: 'blob' })
+      const blob = new Blob([data], { type: 'text/csv;charset=utf-8;' })
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'arrears.csv'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      showError?.('Failed to Export Arrears', err?.message || 'Failed')
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -871,7 +1564,7 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-lg shadow-sm border p-6">
+      <div className="bg-white rounded-lg shadow-sm border p-4 sm:p-6">
         <div className="flex items-center gap-3 mb-6">
           <div className="p-2 bg-purple-100 rounded-lg">
             <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -881,7 +1574,7 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
           <h3 className="text-lg font-semibold text-gray-800">Filters</h3>
         </div>
 
-        <form onSubmit={filter} className="grid gap-4 md:grid-cols-4">
+        <form onSubmit={filter} className="grid gap-3 sm:gap-4 md:grid-cols-4">
           <div className="md:col-span-1">
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Class Filter
@@ -913,7 +1606,7 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
           <div className="md:col-span-2 flex items-end">
             <button
               type="submit"
-              className="w-full md:w-auto px-6 py-2 bg-purple-600 text-white text-sm font-medium rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition-colors"
+              className="w-full md:w-auto px-5 py-2 bg-purple-600 text-white text-sm font-medium rounded-md hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 transition-colors"
             >
               Apply Filters
             </button>
@@ -923,42 +1616,55 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
 
       {/* Students Table */}
       <div className="bg-white rounded-lg shadow-sm border">
-        <div className="p-6 border-b border-gray-200">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-orange-100 rounded-lg">
+        <div className="p-4 sm:p-6 border-b border-gray-200">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2 rounded-lg bg-gradient-to-br from-orange-100 to-orange-50 border border-orange-200">
                 <svg className="w-5 h-5 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
                 </svg>
               </div>
-              <h3 className="text-lg font-semibold text-gray-800">Students with Outstanding Balances</h3>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="text-sm">
-                <span className="text-gray-500">Total: </span>
-                <span className="font-semibold text-red-600">
-                  {loading ? (
-                    <div className="inline-block w-20 h-4 bg-gray-200 rounded animate-pulse"></div>
-                  ) : (
-                    `KES ${totalArrears.toLocaleString()}`
-                  )}
-                </span>
+              <div className="min-w-0">
+                <h3 className="text-base sm:text-lg font-semibold text-gray-900 leading-tight">Students with Outstanding Balances</h3>
+                <div className="sm:hidden text-xs text-gray-500">Track and notify guardians of unpaid balances</div>
               </div>
+            </div>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <div className="hidden sm:block">
+                <input
+                  placeholder="Search students or class"
+                  className="px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={query}
+                  onChange={e=>setQuery(e.target.value)}
+                />
+              </div>
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium bg-red-50 text-red-700 border border-red-200">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+              </svg>
+                Total: KES {loading? '…' : totalArrears.toLocaleString()}
+              </span>
               <button
                 disabled={loading || items.length===0}
-                className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm font-semibold transition-colors shadow-sm ${
                   loading || items.length===0
                     ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                     : 'bg-orange-600 text-white hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2'
                 }`}
                 onClick={()=>{ setNotifyOpen(true); setResultMsg('') }}
               >
-                {loading ? 'Loading...' : `Notify ${items.length} Students`}
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405M19 13V8a6 6 0 10-12 0v5l-2 2"/></svg>
+                {loading || items.length===0 ? 'Notify' : `Notify ${items.length} Students`}
+              </button>
+              <button
+                onClick={printArrears}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm font-semibold bg-white border border-gray-300 hover:bg-gray-50"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 9V2h12v7M6 18h12v4H6zM6 14h12v2H6z"/></svg>
+                Print
               </button>
             </div>
           </div>
         </div>
-
         <div className="overflow-hidden">
           {loading ? (
             <div className="p-6">
@@ -989,66 +1695,115 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
               <p className="mt-1 text-sm text-gray-500">All students are up to date with their payments.</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Student
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Class
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Total Billed
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Total Paid
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Balance
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {items.map((item, index) => (
-                    <tr key={item.student_id} className={`hover:bg-gray-50 transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                            <span className="text-xs font-semibold text-blue-600">
-                              {item.student_name.charAt(0).toUpperCase()}
-                            </span>
-                          </div>
-                          <div className="text-sm font-medium text-gray-900">{item.student_name}</div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {item.class}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        KES {Number(item.total_billed).toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        KES {Number(item.total_paid).toLocaleString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          item.balance > 0
-                            ? 'bg-red-100 text-red-800'
-                            : 'bg-green-100 text-green-800'
-                        }`}>
-                          KES {Number(item.balance).toLocaleString()}
-                        </span>
-                      </td>
+            <>
+              {/* Mobile cards */}
+              <div className="grid gap-2 md:hidden p-4">
+                {filteredItems.map((item) => (
+                  <div key={item.student_id} className="flex items-center justify-between gap-3 p-3 rounded-xl border border-gray-200">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-semibold">
+                        {item.student_name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <button type="button" onClick={()=>openPayForStudent(item)} className="font-medium truncate text-blue-700 hover:underline">{item.student_name}</button>
+                        <div className="text-xs text-gray-500 truncate">{item.class}</div>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs text-gray-500">Balance</div>
+                      <div className={`text-sm font-semibold ${item.balance>0?'text-red-600':'text-emerald-600'}`}>KES {Number(item.balance).toLocaleString()}</div>
+                      <div className="text-[11px] text-gray-500">Billed {Number(item.total_billed).toLocaleString()} • Paid {Number(item.total_paid).toLocaleString()}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop table */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Student</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Class</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Billed</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Total Paid</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Balance</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {filteredItems.map((item, index) => (
+                      <tr key={item.student_id} className={`hover:bg-gray-50 transition-colors ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                              <span className="text-xs font-semibold text-blue-600">{item.student_name.charAt(0).toUpperCase()}</span>
+                            </div>
+                            <button type="button" onClick={()=>openPayForStudent(item)} className="text-sm font-medium text-blue-700 hover:underline text-left">{item.student_name}</button>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{item.class}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">KES {Number(item.total_billed).toLocaleString()}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">KES {Number(item.total_paid).toLocaleString()}</td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${item.balance > 0 ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>KES {Number(item.balance).toLocaleString()}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
       </div>
+
+      {/* Payment Modal */}
+      <Modal open={payOpen} onClose={()=>setPayOpen(false)} title={payStudent ? `Record Payment — ${payStudent.student_name}` : 'Record Payment'}>
+        {payLoading ? (
+          <div className="p-4 text-sm text-gray-600">Loading…</div>
+        ) : (
+          <form onSubmit={submitPayment} className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="sm:col-span-1">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Amount (KES)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={payForm.amount}
+                  onChange={e=>setPayForm({...payForm, amount:e.target.value})}
+                  required
+                />
+              </div>
+              <div className="sm:col-span-1">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Method</label>
+                <select
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  value={payForm.method}
+                  onChange={e=>setPayForm({...payForm, method:e.target.value})}
+                >
+                  <option value="cash">Cash</option>
+                  <option value="mpesa">Mpesa</option>
+                  <option value="bank">Bank</option>
+                </select>
+              </div>
+              <div className="sm:col-span-1">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Reference</label>
+                <input
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="Receipt/Txn ref"
+                  value={payForm.reference}
+                  onChange={e=>setPayForm({...payForm, reference:e.target.value})}
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <button type="button" onClick={()=>setPayOpen(false)} className="px-4 py-2 text-sm font-medium bg-white border border-gray-300 rounded-md hover:bg-gray-50">Cancel</button>
+              <button className="px-4 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700">Record Payment</button>
+            </div>
+          </form>
+        )}
+      </Modal>
 
       {/* Notification Modal */}
       <Modal open={notifyOpen} onClose={()=>setNotifyOpen(false)} title="Send Arrears Notifications" size="lg">

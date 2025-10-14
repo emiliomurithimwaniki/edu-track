@@ -1,6 +1,8 @@
 import axios from 'axios'
 
-export const backendBase = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000')
+// Prefer relative base by default so requests go through Vite proxy (and ngrok single URL)
+// You can still override with VITE_API_BASE_URL if needed.
+export const backendBase = (import.meta.env.VITE_API_BASE_URL ?? '')
 const api = axios.create({
   baseURL: backendBase.replace(/\/$/, '') + '/api',
 })

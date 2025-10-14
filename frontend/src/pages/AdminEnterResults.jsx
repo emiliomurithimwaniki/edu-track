@@ -126,38 +126,50 @@ export default function AdminEnterResults(){
   return (
     <AdminLayout>
       <div className="space-y-4">
+        {/* Header + Toolbar */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h1 className="text-lg font-semibold">{title}</h1>
-          <div className="flex gap-2 items-center">
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-gray-600">Subject:</label>
-              <select className="border p-2 rounded" value={selectedSubject} onChange={e=>setSelectedSubject(e.target.value)}>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">{title}</h1>
+        </div>
+        <div className="sticky top-0 z-10 bg-white/90 backdrop-blur supports-[backdrop-filter]:bg-white/70 rounded-lg border border-gray-200 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0 w-full sm:w-auto">
+            <label className="text-xs text-gray-600">Subject</label>
+            <div className="relative flex-1 sm:flex-none">
+              <select
+                className="border pl-2 pr-8 py-2 rounded-lg text-base sm:text-sm appearance-none w-full sm:w-auto sm:min-w-[240px]"
+                value={selectedSubject}
+                onChange={e=>setSelectedSubject(e.target.value)}
+              >
                 <option value="">All Subjects</option>
-                {subjects.map(s=> (
-                  <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
-                ))}
+                {subjects.map(s=> (<option key={s.id} value={s.id}>{s.code} — {s.name}</option>))}
               </select>
+              <svg className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 9l6 6 6-6"/></svg>
             </div>
-            <button className="px-3 py-2 rounded border" onClick={()=>navigate(-1)}>Back</button>
-            <button disabled={saving} onClick={save} className={`text-white px-4 py-2 rounded ${status==='saved' ? 'bg-green-600' : 'bg-blue-600'}`}>{saving? 'Saving...' : status==='saved' ? 'Saved' : 'Save Results'}</button>
+            <span className="hidden sm:inline text-xs text-gray-500">Total {Number(exam?.total_marks||100)}</span>
+          </div>
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            <button className="px-3 py-1.5 rounded-lg border text-sm" onClick={()=>navigate(-1)}>Back</button>
+            <button disabled={saving} onClick={save} className={`px-3.5 py-1.5 rounded-lg text-sm text-white ${status==='saved' ? 'bg-green-600' : 'bg-blue-600'} disabled:opacity-60`}>
+              {saving? 'Saving...' : status==='saved' ? 'Saved' : 'Save Results'}
+            </button>
           </div>
         </div>
         {loading && <div>Loading...</div>}
         {!loading && (
-          <div className="bg-white rounded shadow p-3 overflow-auto">
+          <div className="bg-white rounded-xl shadow-card border border-gray-200 p-3 overflow-auto max-h-[70vh] md:max-h-[75vh]">
+            <div className="text-xs text-gray-500 mb-2">Legend: <span className="px-1 rounded bg-rose-50 border border-rose-200">Missing/0</span> • <span className="px-1 rounded border border-red-300">Out of range</span></div>
             <table className="min-w-full text-sm">
-              <thead>
+              <thead className="sticky top-0 bg-gray-50 z-10">
                 <tr>
-                  <th className="border px-2 py-1 text-left">Student</th>
+                  <th className="border px-2 py-1 text-left sticky left-0 bg-gray-50">Student</th>
                   {visibleSubjects.map(s => (
-                    <th key={s.id} className="border px-2 py-1 text-left">{s.code}</th>
+                    <th key={s.id} className="border px-2 py-1 text-center whitespace-nowrap">{s.code}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {students.map(stu => (
-                  <tr key={stu.id} className={isRowMissingMarks(stu.id) ? 'bg-amber-50' : ''}>
-                    <td className="border px-2 py-1">{stu.name}</td>
+                {students.map((stu, idx) => (
+                  <tr key={stu.id} className={`${isRowMissingMarks(stu.id) ? 'bg-amber-50/60' : ''} ${idx % 2 === 1 ? 'bg-gray-50/40' : ''}`}>
+                    <td className="border px-2 py-1 sticky left-0 bg-white">{stu.name}</td>
                     {visibleSubjects.map(s => {
                       const idx = results.findIndex(r => r.student===stu.id && r.subject===s.id)
                       const val = idx>-1 ? results[idx].marks : ''
@@ -168,14 +180,15 @@ export default function AdminEnterResults(){
                       const cellKey = `${stu.id}-${s.id}`
                       const isInvalid = overTotal || !!invalid[cellKey]
                       return (
-                        <td key={s.id} className={`border px-2 py-1 ${isMissingCell ? 'bg-rose-50' : ''} ${isInvalid ? 'outline outline-1 outline-red-400' : ''}`}>
+                        <td key={s.id} className={`border px-1.5 py-1 text-center ${isMissingCell ? 'bg-rose-50' : ''} ${isInvalid ? 'outline outline-1 outline-red-400' : ''}`}>
                           <input
                             type="number"
                             inputMode="decimal"
                             min={0}
                             max={total}
                             step="0.01"
-                            className={`border p-1 rounded w-20 ${isInvalid ? 'border-red-500 bg-red-50' : ''}`}
+                            placeholder={`${total}`}
+                            className={`border px-2 py-1 rounded w-16 text-center ${isInvalid ? 'border-red-500 bg-red-50' : 'border-gray-300'}`}
                             value={val}
                             onChange={e=>{
                               const v = e.target.value

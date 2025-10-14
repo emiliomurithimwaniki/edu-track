@@ -5,11 +5,10 @@ import api from '../api';
 
 const navItems = [
     { to: '/finance', label: 'Dashboard', icon: '📊' },
-    { to: '/finance/invoices', label: 'Invoices', icon: '🧾' },
     { to: '/finance/payments', label: 'Payments', icon: '💳' },
     { to: '/finance/expenses', label: 'Expenses', icon: '💸' },
     { to: '/finance/pocket-money', label: 'Pocket Money', icon: '💰' },
-    { to: '/finance/class-fees', label: 'Fees', icon: '🏷️' },
+    { to: '/finance/fees', label: 'Fees', icon: '🏷️' },
     { to: '/finance/reports', label: 'Reports', icon: '📈' },
     { to: '/finance/messages', label: 'Messages', icon: '✉️' },
     { to: '/finance/settings', label: 'Settings', icon: '⚙️' },
@@ -85,12 +84,38 @@ export default function FinanceLayout({ children }) {
                 <button className="p-2.5 rounded-lg hover:bg-gray-100/80 transition-all duration-200 hidden md:inline-flex" aria-label="Collapse sidebar" onClick={() => setIsOpen(v => !v)}>
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-gray-600"><path fillRule="evenodd" d="M19.5 3.75a.75.75 0 01.75.75v14.25a.75.75 0 01-.75.75H4.5a.75.75 0 01-.75-.75V4.5a.75.75 0 01.75-.75h15zm-9.53 3.22a.75.75 0 10-1.06 1.06l2.72 2.72-2.72 2.72a.75.75 0 101.06 1.06l3.25-3.25a.75.75 0 000-1.06l-3.25-3.25z" clipRule="evenodd" /></svg>
                 </button>
-                <div className="flex items-center gap-2">
-                    <img src="/logo.jpg" alt="EDU-TRACK Logo" className="w-8 h-8 rounded object-contain" />
-                    <div className="font-bold text-xl text-gray-900 tracking-tight">EDU-TRACK Finance</div>
+                <div className="hidden md:flex items-center gap-1 ml-1">
+                    <button className="p-2 rounded-lg hover:bg-gray-100/80 transition-all duration-200" aria-label="Go back" onClick={() => navigate(-1)}>
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-gray-700"><path fillRule="evenodd" d="M9.53 4.47a.75.75 0 010 1.06L5.56 9.5H20.25a.75.75 0 010 1.5H5.56l3.97 3.97a.75.75 0 11-1.06 1.06l-5.25-5.25a.75.75 0 010-1.06l5.25-5.25a.75.75 0 011.06 0z" clipRule="evenodd"/></svg>
+                    </button>
+                    <button className="p-2 rounded-lg hover:bg-gray-100/80 transition-all duration-200" aria-label="Go forward" onClick={() => navigate(1)}>
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-gray-700"><path fillRule="evenodd" d="M14.47 4.47a.75.75 0 011.06 0l5.25 5.25a.75.75 0 010 1.06l-5.25 5.25a.75.75 0 11-1.06-1.06l3.97-3.97H3.75a.75.75 0 010-1.5h14.69l-3.97-3.97a.75.75 0 010-1.06z" clipRule="evenodd"/></svg>
+                    </button>
+                </div>
+                <div className="flex items-center gap-3 min-w-0">
+                    <img src={schoolLogo || '/logo.jpg'} alt="School Logo" className="w-8 h-8 rounded object-contain" />
+                    <div className="flex items-baseline gap-2 truncate">
+                        <span className="text-gray-900 font-extrabold tracking-tight">EDUTRACK</span>
+                        <span className="text-gray-300">|</span>
+                        <span className="font-bold text-xl text-gray-900 tracking-tight truncate">{(schoolName || 'School')} Finance</span>
+                    </div>
                 </div>
                 <div className="flex-1"></div>
-                <button onClick={logout} className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-all duration-200 shadow-soft">Logout</button>
+                <div className="flex items-center gap-3">
+                    <button onClick={() => navigate('/finance/settings')} className="flex items-center gap-2 group">
+                        { (user?.avatar_url || user?.photo_url || user?.profile_picture_url) ? (
+                            <img src={user?.avatar_url || user?.photo_url || user?.profile_picture_url} alt="Profile" className="w-8 h-8 rounded-full object-cover ring-1 ring-gray-200" />
+                        ) : (
+                            <div className="w-8 h-8 rounded-full bg-gray-200 text-gray-700 text-xs flex items-center justify-center font-semibold ring-1 ring-gray-200">
+                                {(user?.first_name?.[0] || user?.username?.[0] || 'U').toUpperCase()}
+                            </div>
+                        ) }
+                        <span className="text-sm text-gray-700 font-medium group-hover:underline">
+                            {user?.first_name || user?.username || 'User'}
+                        </span>
+                    </button>
+                    <button onClick={logout} className="px-4 py-2 rounded-lg text-sm font-medium bg-gray-900 text-white hover:bg-gray-800 transition-all duration-200 shadow-soft">Logout</button>
+                </div>
             </header>
 
             <div className="relative">

@@ -24,6 +24,9 @@ from accounts.models import School
 
 User = get_user_model()
 
+def kenyan_phone():
+    return '07' + ''.join(str(random.randint(0, 9)) for _ in range(8))
+
 def seed_data():
     fake = Faker()
     Faker.seed(42)  # For reproducible results
@@ -264,7 +267,7 @@ def seed_data():
                 first_name=first_name,
                 last_name=last_name,
                 role='student',
-                phone=fake.phone_number(),
+                phone=kenyan_phone(),
                 school=school
             )
 
@@ -282,7 +285,7 @@ def seed_data():
                 guardian_id=f'GUARD{i+1:04d}',
                 klass=student_class,
                 user=user,
-                phone=fake.phone_number(),
+                phone=kenyan_phone(),
                 email=f'{username}@student.com',
                 address=fake.address()
             )

@@ -24,19 +24,34 @@ if RENDER_HOSTNAME and RENDER_HOSTNAME not in ALLOWED_HOSTS:
 if '.onrender.com' not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append('.onrender.com')
 
-# Add ngrok domain for temporary public exposure
-NGROK_HOST = "c714cb9ba36c.ngrok-free.app"
-if NGROK_HOST not in ALLOWED_HOSTS:
-    ALLOWED_HOSTS.append(NGROK_HOST)
+# Add ngrok domain(s) for temporary public exposure
+# Prefer env-provided host/url to avoid code edits each time the tunnel changes
+NGROK_HOST = os.getenv('NGROK_HOST', '').strip()
+if not NGROK_HOST:
+    # Allow passing full URL via NGROK_URL, e.g. https://1234.ngrok-free.app
+    ngrok_url = os.getenv('NGROK_URL', '').strip().rstrip('/')
+    if ngrok_url.startswith('http://') or ngrok_url.startswith('https://'):
+        NGROK_HOST = ngrok_url.split('://', 1)[1]
 
-NGROK_ORIGIN = f"https://{NGROK_HOST}"
-if NGROK_ORIGIN not in CSRF_TRUSTED_ORIGINS:
-    CSRF_TRUSTED_ORIGINS.append(NGROK_ORIGIN)
+if NGROK_HOST:
+    if NGROK_HOST not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(NGROK_HOST)
+    NGROK_ORIGIN = f"https://{NGROK_HOST}"
+    if NGROK_ORIGIN not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(NGROK_ORIGIN)
+    # Also include HTTP in case the tunnel is accessed via http
+    NGROK_ORIGIN_HTTP = f"http://{NGROK_HOST}"
+    if NGROK_ORIGIN_HTTP not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(NGROK_ORIGIN_HTTP)
 
-# Also include HTTP in case the tunnel is accessed via http
-NGROK_ORIGIN_HTTP = f"http://{NGROK_HOST}"
-if NGROK_ORIGIN_HTTP not in CSRF_TRUSTED_ORIGINS:
-    CSRF_TRUSTED_ORIGINS.append(NGROK_ORIGIN_HTTP)
+# When in DEBUG, allow any ngrok-free subdomain for convenience
+if DEBUG:
+    if '.ngrok-free.app' not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append('.ngrok-free.app')
+    # CSRF_TRUSTED_ORIGINS supports wildcard patterns (Django >=4.1)
+    for pattern in ['https://*.ngrok-free.app', 'http://*.ngrok-free.app']:
+        if pattern not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(pattern)
 
 # Build CSRF trusted origins from ALLOWED_HOSTS (https first, then http)
 for host in ALLOWED_HOSTS:
@@ -237,6 +252,10 @@ AT_SENDER_ID = os.getenv('AT_SENDER_ID', '')
 AT_USE_REST_FOR_SANDBOX = os.getenv('AT_USE_REST_FOR_SANDBOX', 'True') == 'True'
 # Optional: simulate SMS success in development when delivery fails (for demos/tests)
 SMS_LOOPBACK = os.getenv('SMS_LOOPBACK', 'False') == 'True'
+# Optional: path to a custom CA bundle (PEM). If set, requests will verify TLS using this bundle.
+AT_CA_BUNDLE = os.getenv('AT_CA_BUNDLE', '')
+# Optional: whether to trust environment proxy settings (HTTP(S)_PROXY). Default False to avoid TLS downgrades.
+AT_TRUST_ENV = os.getenv('AT_TRUST_ENV', 'False') == 'True'
 
 # Control whether creating chat messages queues email/SMS delivery
 MESSAGES_QUEUE_DELIVERY = os.getenv('MESSAGES_QUEUE_DELIVERY', 'True') == 'True'

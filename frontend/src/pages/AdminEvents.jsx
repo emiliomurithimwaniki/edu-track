@@ -5,15 +5,23 @@ import Modal from '../components/Modal'
 import api from '../api'
 import { useNotification } from '../components/NotificationContext'
 
-function groupByDate(events){
-  const by = {}
+function ymdLocal(dateLike){
+  const d = new Date(dateLike)
+  const y = d.getFullYear()
+  const m = String(d.getMonth()+1).padStart(2,'0')
+  const da = String(d.getDate()).padStart(2,'0')
+  return `${y}-${m}-${da}`
+}
+
+function groupByDateOrdered(events){
+  // Preserve incoming order within groups and of groups
+  const map = new Map()
   for (const e of events) {
-    const key = new Date(e.start).toISOString().slice(0,10)
-    if (!by[key]) by[key] = []
-    by[key].push(e)
+    const key = ymdLocal(e.start)
+    if (!map.has(key)) map.set(key, [])
+    map.get(key).push(e)
   }
-  const keys = Object.keys(by).sort()
-  return keys.map(k => [k, by[k].sort((a,b)=> new Date(a.start) - new Date(b.start))])
+  return Array.from(map.entries())
 }
 
 // Calendar helpers
@@ -67,11 +75,88 @@ export default function AdminEvents(){
   const { showSuccess, showError } = useNotification()
   const navigate = useNavigate()
 
+  // Hide auto-synced term events like "2025 - Term 1/2/3"
+  const isTermEvent = (ev) => {
+    const t = (ev?.title || '').toLowerCase()
+    const d = (ev?.description || '').toLowerCase()
+    if (ev?.source === 'exam') return false
+    if (d.includes('auto-synced') && d.includes('term')) return true
+    const termRegex = /\bterm\s*(1|2|3)\b/i
+    return termRegex.test(ev?.title || '') || termRegex.test(ev?.description || '')
+  }
+  const filteredEvents = useMemo(() => events.filter(e => !isTermEvent(e)), [events])
+
+  // Determine if an event has already ended (expired)
+  const isExpired = (ev) => {
+    try{
+      const end = ev?.end ? new Date(ev.end) : (ev?.start ? new Date(ev.start) : null)
+      if (!end) return false
+      return end.getTime() < Date.now()
+    }catch{ return false }
+  }
+
+  // Countdown helpers for upcoming events
+  const [nowTs, setNowTs] = useState(()=> Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNowTs(Date.now()), 60000) // update every minute
+    return () => clearInterval(id)
+  }, [])
+
+  const countdownLabel = (startIso) => {
+    try{
+      const start = new Date(startIso).getTime()
+      const diff = start - nowTs
+      if (diff <= 0) return ''
+      const mins = Math.floor(diff / 60000)
+      const days = Math.floor(mins / (60*24))
+      const hours = Math.floor((mins % (60*24)) / 60)
+      const remMins = mins % 60
+      if (days > 0) return `in ${days}d ${hours}h`
+      if (hours > 0) return `in ${hours}h ${remMins}m`
+      return `in ${remMins}m`
+    }catch{ return '' }
+  }
+
+  // Ongoing detector for styling and ordering
+  const isOngoing = (ev) => {
+    try{
+      const s = new Date(ev.start).getTime()
+      const e = new Date(ev.end || ev.start).getTime()
+      return s <= nowTs && nowTs <= e
+    }catch{ return false }
+  }
+
   const load = async () => {
     setLoading(true); setError('')
     try {
-      const { data } = await api.get('/communications/events/')
-      setEvents(data)
+      const [evRes, exRes] = await Promise.all([
+        api.get('/communications/events/'),
+        api.get('/academics/exams/', { params: { include_history: true } }).catch(()=>({ data: [] })),
+      ])
+      const baseEvents = Array.isArray(evRes.data) ? evRes.data : (evRes.data?.results || [])
+      const exams = Array.isArray(exRes.data) ? exRes.data : (exRes.data?.results || [])
+      const examEvents = exams.map(x => {
+        const dateStr = x.date || x.exam_date || x.scheduled_date || new Date().toISOString().slice(0,10)
+        // Keep as local datetime strings to prevent TZ shifts in the UI
+        const startStr = `${dateStr}T00:00:00`
+        const endStr = `${dateStr}T23:59:59`
+        return {
+          id: `exam-${x.id}`,
+          title: `Exam: ${x.name}`,
+          description: `Exam for class ${x.klass_name || x.class_name || ''}`.trim(),
+          location: '',
+          start: startStr,
+          end: endStr,
+          all_day: true,
+          audience: 'all',
+          visibility: 'internal',
+          created_by: null,
+          created_at: x.created_at || null,
+          updated_at: x.updated_at || null,
+          source: 'exam',
+        }
+      })
+      setEvents([...baseEvents, ...examEvents])
     } catch (e) {
       setError(e?.response?.data ? JSON.stringify(e.response.data) : e.message)
     } finally {
@@ -135,6 +220,33 @@ export default function AdminEvents(){
     }
   }
 
+  // Completion modal state and handlers
+  const [isCompleteOpen, setIsCompleteOpen] = useState(false)
+  const [completeTarget, setCompleteTarget] = useState(null)
+  const [completeForm, setCompleteForm] = useState({ completed: true, comment: '' })
+
+  const openComplete = (ev) => {
+    setCompleteTarget(ev)
+    setCompleteForm({ completed: ev?.completed ?? true, comment: ev?.completion_comment || '' })
+    setIsCompleteOpen(true)
+  }
+
+  const submitComplete = async (e) => {
+    e.preventDefault()
+    if (!completeTarget) return
+    try {
+      const { data } = await api.post(`/communications/events/${completeTarget.id}/complete/`, {
+        completed: completeForm.completed,
+        comment: completeForm.comment,
+      })
+      setEvents(prev => prev.map(x => x.id === data.id ? data : x))
+      setIsCompleteOpen(false)
+      showSuccess('Event updated', completeForm.completed ? 'Marked as completed.' : 'Marked as not completed.')
+    } catch (err) {
+      showError('Failed to update event', err?.response?.data?.detail || err?.message || 'Error')
+    }
+  }
+
   const remove = async (id) => {
     if (!confirm('Delete this event?')) return
     try {
@@ -150,38 +262,64 @@ export default function AdminEvents(){
     navigate('/admin/calendar')
   }
 
-  const grouped = useMemo(()=> groupByDate(events), [events])
+  const orderedEvents = useMemo(() => {
+    const arr = [...filteredEvents]
+    const now = nowTs
+    const isOngoingLocal = (ev) => {
+      try{
+        const s = new Date(ev.start).getTime()
+        const e = new Date(ev.end || ev.start).getTime()
+        return s <= now && now <= e
+      }catch{ return false }
+    }
+    arr.sort((a,b) => {
+      const cat = (e) => isOngoingLocal(e) ? 0 : (new Date(e.start).getTime() > now ? 1 : 2)
+      const ca = cat(a), cb = cat(b)
+      if (ca !== cb) return ca - cb
+      if (ca === 0) return new Date(a.end || a.start) - new Date(b.end || b.start) // ongoing: ending sooner first
+      if (ca === 1) return new Date(a.start) - new Date(b.start) // upcoming: sooner first
+      return new Date(b.end || b.start) - new Date(a.end || a.start) // past: most recent first
+    })
+    return arr
+  }, [filteredEvents, nowTs])
+
+  const grouped = useMemo(()=> groupByDateOrdered(orderedEvents), [orderedEvents])
   const monthDays = useMemo(()=> buildMonthGrid(month), [month])
   const eventsByDay = useMemo(()=>{
     const map = {}
-    for (const ev of events){
-      const key = new Date(ev.start).toISOString().slice(0,10)
+    for (const ev of filteredEvents){
+      const key = ymdLocal(ev.start)
       if (!map[key]) map[key] = []
       map[key].push(ev)
     }
     return map
-  }, [events])
+  }, [filteredEvents])
 
   return (
     <AdminLayout>
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <h1 className="text-xl font-semibold">School Events</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight text-gray-900">School Events</h1>
+            <span className="text-xs px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">Modern View</span>
+          </div>
           <div className="flex items-center gap-2 ml-auto">
-            <button onClick={handleAcademicCalendar} className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition-colors">
-              📆 Academic Calendar
+            <button onClick={handleAcademicCalendar} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 transition">
+              <span>📆</span><span className="hidden sm:inline">Academic Calendar</span>
             </button>
-            <button onClick={()=>setViewMode(v=> v==='list' ? 'calendar' : 'list')} className="px-3 py-2 rounded border">
+            <button onClick={()=>setViewMode(v=> v==='list' ? 'calendar' : 'list')} className="px-3.5 py-2 rounded-lg border bg-white hover:bg-gray-50 shadow-sm">
               {viewMode==='list' ? 'Calendar View' : 'List View'}
             </button>
             {viewMode==='calendar' && (
               <div className="flex items-center gap-2">
-                <button className="px-2 py-2 rounded border" onClick={()=> setMonth(m=> new Date(m.getFullYear(), m.getMonth()-1, 1))}>Prev</button>
+                <button className="px-2.5 py-2 rounded-lg border bg-white hover:bg-gray-50 shadow-sm" onClick={()=> setMonth(m=> new Date(m.getFullYear(), m.getMonth()-1, 1))}>Prev</button>
                 <div className="text-sm font-medium w-36 text-center">{month.toLocaleString(undefined, { month: 'long', year: 'numeric'})}</div>
-                <button className="px-2 py-2 rounded border" onClick={()=> setMonth(m=> new Date(m.getFullYear(), m.getMonth()+1, 1))}>Next</button>
+                <button className="px-2.5 py-2 rounded-lg border bg-white hover:bg-gray-50 shadow-sm" onClick={()=> setMonth(m=> new Date(m.getFullYear(), m.getMonth()+1, 1))}>Next</button>
               </div>
             )}
-            <button onClick={()=>setIsCreateOpen(true)} className="bg-blue-600 text-white px-4 py-2 rounded">Create Event</button>
+            <button onClick={()=>setIsCreateOpen(true)} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-indigo-600 text-white shadow-sm hover:bg-indigo-700">
+              <span>＋</span><span className="hidden sm:inline">Create Event</span>
+            </button>
           </div>
         </div>
 
@@ -194,7 +332,7 @@ export default function AdminEvents(){
             </div>
             <div className="grid grid-cols-7 gap-1">
               {monthDays.map((d,i)=>{
-                const key = d.toISOString().slice(0,10)
+                const key = ymdLocal(d)
                 const inMonth = d.getMonth()===month.getMonth()
                 const items = eventsByDay[key] || []
                 return (
@@ -202,9 +340,14 @@ export default function AdminEvents(){
                     <div className={`text-xs mb-1 ${inMonth? 'text-gray-700':'text-gray-400'}`}>{d.getDate()}</div>
                     <div className="space-y-1">
                       {items.slice(0,3).map(ev => (
-                        <div key={ev.id} className="text-xs truncate px-1 py-0.5 rounded bg-blue-50 text-blue-700 cursor-pointer" title={ev.title}
+                        <div key={ev.id} className={`text-[11px] truncate px-1.5 py-0.5 rounded cursor-pointer border font-semibold focus:outline-none focus:ring-2 focus:ring-offset-1 ${ev.source==='exam' ? 'bg-purple-100 text-purple-800 border-purple-300 focus:ring-purple-200' : (isExpired(ev) ? 'bg-rose-100 text-rose-800 border-rose-300 focus:ring-rose-200' : 'bg-blue-100 text-blue-800 border-blue-300 focus:ring-blue-200')}`} title={ev.title}
                           onClick={()=>openEdit(ev)}>
-                          {ev.title}
+                          <span>{ev.title}</span>
+                          {!isExpired(ev) && countdownLabel(ev.start) && (
+                            <span className="ml-1 text-[10px] px-1 py-0 rounded bg-white/60 border border-current/20 rounded">
+                              {countdownLabel(ev.start)}
+                            </span>
+                          )}
                         </div>
                       ))}
                       {items.length>3 && <div className="text-[10px] text-gray-500">+{items.length-3} more</div>}
@@ -223,23 +366,32 @@ export default function AdminEvents(){
           )}
           {!loading && grouped.map(([date, items]) => (
             <div key={date} className="p-4">
-              <div className="text-xs text-gray-500 mb-2">{date}</div>
-              <div className="space-y-2">
+              <div className="text-xs text-gray-500 mb-2 flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-gray-300" />
+                <span>{date}</span>
+              </div>
+              <div className="space-y-3">
                 {items.map(ev => (
-                  <div key={ev.id} className="border rounded p-3 flex flex-col sm:flex-row sm:items-center gap-2">
+                  <div key={ev.id} className={`border rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center gap-3 shadow-sm hover:shadow-md transition ${isExpired(ev) ? 'bg-rose-50 border-rose-200' : 'bg-white'} ${isOngoing(ev) ? 'border-l-4 border-l-emerald-500' : (!isExpired(ev) ? 'border-l-4 border-l-indigo-500' : 'border-l-4 border-l-rose-500')}`}>
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">{ev.title}</div>
-                      <div className="text-xs text-gray-600 truncate">
+                      <div className={`font-semibold tracking-tight truncate ${isExpired(ev) ? 'text-rose-700' : 'text-gray-900'}`}>{ev.title}</div>
+                      <div className="text-xs text-gray-600 truncate mt-0.5">
                         {ev.all_day ? 'All day' : `${new Date(ev.start).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} - ${new Date(ev.end).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`}
                       </div>
                       {ev.location && <div className="text-xs text-gray-600 truncate">📍 {ev.location}</div>}
                       {ev.description && <div className="text-xs text-gray-600 truncate">{ev.description}</div>}
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-xs px-2 py-0.5 rounded bg-gray-100">{ev.audience}</span>
-                      <span className="text-xs px-2 py-0.5 rounded bg-gray-100">{ev.visibility}</span>
-                      <button onClick={()=>openEdit(ev)} className="text-blue-600 text-sm">Edit</button>
-                      <button onClick={()=>remove(ev.id)} className="text-red-600 text-sm">Delete</button>
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">{ev.source==='exam' ? 'exam' : ev.audience}</span>
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">{ev.visibility}</span>
+                      {isExpired(ev) && <span className="text-[11px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">Expired</span>}
+                      {ev.completed && <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done</span>}
+                      {!isExpired(ev) && countdownLabel(ev.start) && (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-800 border border-blue-200">{countdownLabel(ev.start)}</span>
+                      )}
+                      <button onClick={()=>openComplete(ev)} className="text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-gray-50 shadow-sm">{ev.completed ? 'Update Status' : 'Mark Done'}</button>
+                      <button onClick={()=>openEdit(ev)} className="text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-blue-50 text-blue-700 border-blue-200">Edit</button>
+                      <button onClick={()=>remove(ev.id)} className="text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-rose-50 text-rose-700 border-rose-200">Delete</button>
                     </div>
                   </div>
                 ))}
@@ -276,6 +428,23 @@ export default function AdminEvents(){
           <div className="md:col-span-2 flex justify-end gap-2 mt-2">
             <button type="button" onClick={()=>setIsCreateOpen(false)} className="px-4 py-2 rounded border">Cancel</button>
             <button className="bg-blue-600 text-white px-4 py-2 rounded">Save</button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal open={isCompleteOpen} onClose={()=>setIsCompleteOpen(false)} title="Event Completion" size="md">
+        <form onSubmit={submitComplete} className="grid gap-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={!!completeForm.completed} onChange={e=>setCompleteForm(f=>({...f, completed: e.target.checked}))} />
+            Mark as completed
+          </label>
+          <label className="grid gap-1">
+            <span className="text-xs text-gray-600">Comment (optional)</span>
+            <textarea className="border rounded p-2" rows={4} value={completeForm.comment} onChange={e=>setCompleteForm(f=>({...f, comment:e.target.value}))} placeholder="Notes about how the event went..." />
+          </label>
+          <div className="flex justify-end gap-2 mt-2">
+            <button type="button" onClick={()=>setIsCompleteOpen(false)} className="px-4 py-2 rounded border">Cancel</button>
+            <button className="bg-emerald-600 text-white px-4 py-2 rounded">Save</button>
           </div>
         </form>
       </Modal>

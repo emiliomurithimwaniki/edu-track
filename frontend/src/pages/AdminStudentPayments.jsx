@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import AdminLayout from '../components/AdminLayout'
 import Modal from '../components/Modal'
-import api from '../api'
+import api, { backendBase } from '../api'
 
 export default function AdminStudentPayments(){
   const { id } = useParams()
@@ -11,6 +11,9 @@ export default function AdminStudentPayments(){
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showPay, setShowPay] = useState(false)
+  const [showReceipt, setShowReceipt] = useState(false)
+  const [receipt, setReceipt] = useState(null)
+  const [receiptLoading, setReceiptLoading] = useState(false)
   const [paying, setPaying] = useState(false)
   const [stkStatus, setStkStatus] = useState('idle') // idle | initiating | sent | polling | fetching | success | failed
   const [payForm, setPayForm] = useState({ invoice: '', amount: '', method: 'mpesa', reference: '', phone: '', attachment: null })
@@ -36,6 +39,26 @@ export default function AdminStudentPayments(){
       }finally{
         alive && setLoading(false)
       }
+
+  async function openReceipt(paymentId){
+    setReceipt(null)
+    setReceiptLoading(true)
+    setShowReceipt(true)
+    try{
+      const { data } = await api.get(`/finance/payments/${paymentId}/receipt/`)
+      setReceipt(data)
+    }catch(e){
+      setReceipt({ error: e?.response?.data?.detail || e?.message || 'Failed to load receipt' })
+    }finally{
+      setReceiptLoading(false)
+    }
+  }
+
+  function onPrintReceipt(){
+    try{
+      window.print()
+    }catch{}
+  }
     }
     load()
     return ()=>{ alive = false }
@@ -158,6 +181,12 @@ export default function AdminStudentPayments(){
         {loading && (<div className="bg-white rounded shadow p-4">Loading...</div>)}
         {error && (<div className="bg-red-50 text-red-700 p-3 rounded">{error}</div>)}
         <div className="bg-white rounded shadow p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-sm text-gray-600">Payment History</div>
+            <a href={`${backendBase.replace(/\/$/, '')}/api/finance/payments/export?invoice__student=${id}`} className="px-3 py-2 rounded border bg-white hover:bg-gray-50 text-sm" target="_blank" rel="noreferrer">
+              Download CSV
+            </a>
+          </div>
           <table className="w-full text-left text-sm">
             <thead>
               <tr>
@@ -166,6 +195,7 @@ export default function AdminStudentPayments(){
                 <th>Method</th>
                 <th>Reference</th>
                 <th>Created</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -176,6 +206,9 @@ export default function AdminStudentPayments(){
                   <td className="capitalize">{p.method}</td>
                   <td>{p.reference || '-'}</td>
                   <td>{p.created_at?.slice(0,10)}</td>
+                  <td>
+                    <button onClick={()=>openReceipt(p.id)} className="text-blue-600 hover:underline">View Receipt</button>
+                  </td>
                 </tr>
               ))}
               {payments.length === 0 && !loading && (
@@ -269,6 +302,38 @@ export default function AdminStudentPayments(){
           </form>
         </Modal>
       </div>
+      {/* Receipt Modal */}
+      <Modal open={showReceipt} onClose={()=>setShowReceipt(false)} title="Payment Receipt" size="md">
+        {receiptLoading && (<div className="p-2 text-sm text-gray-600">Loading receipt...</div>)}
+        {!receiptLoading && receipt?.error && (<div className="bg-red-50 text-red-700 text-sm p-2 rounded">{receipt.error}</div>)}
+        {!receiptLoading && receipt && !receipt.error && (
+          <div className="text-sm" id="printable-receipt">
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-semibold">{receipt.school?.name || 'School'}</div>
+              <div>Receipt No: {receipt.receipt_no}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <div>
+                <div>Date: {String(receipt.date).slice(0,10)}</div>
+                <div>Method: {String(receipt.method).toUpperCase()}</div>
+                <div>Reference: {receipt.reference || '-'}</div>
+              </div>
+              <div>
+                <div>Student: {receipt.student?.name} (#{receipt.student?.id})</div>
+                <div>Class: {receipt.student?.class || '-'}</div>
+                <div>Admission No: {receipt.student?.admission_no || '-'}</div>
+              </div>
+            </div>
+            <div className="border-t py-2">
+              <div>Invoice ID: {receipt.invoice} • Invoice Amount: {money(receipt.invoice_amount)}</div>
+              <div className="text-lg font-semibold">Amount Paid: {money(receipt.amount)}</div>
+            </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <button onClick={onPrintReceipt} className="px-3 py-2 rounded border">Print</button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </AdminLayout>
   )
 }

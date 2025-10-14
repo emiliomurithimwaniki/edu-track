@@ -8,7 +8,7 @@ import { useNotification } from '../components/NotificationContext'
 export default function AdminStudents(){
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
-  const [form, setForm] = useState({ admission_no:'', name:'', dob:'', gender:'', guardian_id:'', klass:'' })
+  const [form, setForm] = useState({ admission_no:'', upi_number:'', name:'', dob:'', gender:'', guardian_id:'', klass:'' })
   const [showAddStudent, setShowAddStudent] = useState(false)
   const [addStatus, setAddStatus] = useState('idle') // idle | adding | completed
   const [addError, setAddError] = useState('')
@@ -85,7 +85,7 @@ export default function AdminStudents(){
       await api.post('/academics/students/', studentPayload)
 
       // Clear form and mark completed
-      setForm({ admission_no:'', name:'', dob:'', gender:'', guardian_id:'', klass:'' })
+      setForm({ admission_no:'', upi_number:'', name:'', dob:'', gender:'', guardian_id:'', klass:'' })
       setAddStatus('completed')
 
       // Revert button text after a short delay so user can add another or close
@@ -167,6 +167,7 @@ export default function AdminStudents(){
               <tr>
                 <th>Admission No</th>
                 <th>Name</th>
+                <th>UPI Number</th>
                 <th>Class</th>
                 <th>Guardian Phone</th>
               </tr>
@@ -181,6 +182,7 @@ export default function AdminStudents(){
                     </div>
                     ${student.name}
                   </td>
+                  <td>${student.upi_number || 'N/A'}</td>
                   <td>${student.klass_detail?.name || student.klass || 'Not Assigned'}</td>
                   <td>${student.guardian_id || 'N/A'}</td>
                 </tr>
@@ -203,11 +205,12 @@ export default function AdminStudents(){
   const handleDownload = () => {
     const csvContent = [
       // Header row
-      ['Admission No', 'Name', 'Date of Birth', 'Gender', 'Class', 'Guardian Phone'],
+      ['Admission No', 'Name', 'UPI Number', 'Date of Birth', 'Gender', 'Class', 'Guardian Phone'],
       // Data rows
       ...filteredStudents.map(student => [
         student.admission_no,
         student.name,
+        student.upi_number || 'N/A',
         student.dob || 'N/A',
         student.gender || 'N/A',
         student.klass_detail?.name || student.klass || 'Not Assigned',
@@ -568,6 +571,15 @@ export default function AdminStudents(){
                 value={form.admission_no}
                 onChange={e=>setForm({...form, admission_no:e.target.value})}
                 required
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">UPI Number</label>
+              <input
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Enter UPI Number (optional)"
+                value={form.upi_number}
+                onChange={e=>setForm({...form, upi_number:e.target.value})}
               />
             </div>
             <div>

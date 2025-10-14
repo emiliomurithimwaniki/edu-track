@@ -30,6 +30,8 @@ class User(AbstractUser):
     phone = models.CharField(max_length=20, blank=True)
     school = models.ForeignKey(School, null=True, blank=True, on_delete=models.SET_NULL)
     email_verified = models.BooleanField(default=False)
+    # Avatar/profile picture for UI
+    profile_picture = models.ImageField(upload_to='avatars/', null=True, blank=True)
 
 
 class EmailVerificationToken(models.Model):

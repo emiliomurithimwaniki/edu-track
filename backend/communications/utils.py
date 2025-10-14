@@ -6,6 +6,7 @@ from django.db import transaction
 import threading
 import json
 import requests
+import os
 from requests.adapters import HTTPAdapter
 from urllib3.util import ssl_  # type: ignore
 from urllib3.util.retry import Retry  # type: ignore
@@ -67,21 +68,25 @@ def _send_sms_via_at_rest(username: str, api_key: str, phone: str, message: str,
         }
 
         # Prepare a TLS 1.2-enforced adapter and small retry policy (adapter defined top-level)
-
         retries = Retry(total=2, backoff_factor=0.5, status_forcelist=(429, 500, 502, 503, 504))
 
-        # Use a session that ignores environment proxies to avoid system/corporate proxy TLS downgrades
+        # Determine verification and proxy behavior from settings
+        ca_bundle = getattr(settings, 'AT_CA_BUNDLE', '') or ''
+        verify_param = ca_bundle if ca_bundle else True
+        trust_env = getattr(settings, 'AT_TRUST_ENV', False)
+
+        # Use a session and honor configured proxy trust and CA bundle
         with requests.Session() as s:
-            s.trust_env = False  # ignore HTTP(S)_PROXY, NO_PROXY, etc.
+            s.trust_env = bool(trust_env)
             s.mount("https://", TLSv1_2HttpAdapter(max_retries=retries))
             try:
-                resp = s.post(url, data=data, headers=headers, timeout=20)
+                resp = s.post(url, data=data, headers=headers, timeout=20, verify=verify_param)
                 resp.raise_for_status()
             except requests.exceptions.SSLError:
                 # Guarded fallback: try once with certificate verification disabled, using a fresh session
                 logger.warning("SSL handshake to Africa's Talking failed; retrying once with verify=False")
                 with requests.Session() as s2:
-                    s2.trust_env = False
+                    s2.trust_env = bool(trust_env)
                     resp = s2.post(url, data=data, headers=headers, timeout=20, verify=False)
                     resp.raise_for_status()
 
@@ -177,6 +182,10 @@ def send_sms(phone: str, message: str) -> bool:
                 return _send_sms_via_at_rest(at_username, at_api_key, phone, message, at_sender)
 
         # Live mode: use official SDK
+        # If a custom CA bundle is provided, propagate it to requests used by the SDK
+        ca_bundle = getattr(settings, 'AT_CA_BUNDLE', '') or ''
+        if ca_bundle and not os.environ.get('REQUESTS_CA_BUNDLE'):
+            os.environ['REQUESTS_CA_BUNDLE'] = ca_bundle
         import africastalking  # type: ignore
         africastalking.initialize(at_username, at_api_key)
         sms = africastalking.SMS
@@ -304,11 +313,35 @@ def process_arrears_campaign(campaign_id: int):
         if campaign.klass_id:
             students = students.filter(klass_id=campaign.klass_id)
 
-        # Compute balances
+        # Compute balances per student using Subqueries to avoid join multiplication between invoices and payments
+        from django.db.models import OuterRef, Subquery
+        from finance.models import Invoice, Payment
+        billed_sq = (
+            Invoice.objects
+            .filter(student_id=OuterRef('pk'))
+            .values('student_id')
+            .annotate(s=Sum('amount'))
+            .values('s')[:1]
+        )
+        paid_sq = (
+            Payment.objects
+            .filter(invoice__student_id=OuterRef('pk'))
+            .values('invoice__student_id')
+            .annotate(s=Sum('amount'))
+            .values('s')[:1]
+        )
         students = students.annotate(
-            billed=Coalesce(Sum('invoice__amount'), Value(0, output_field=DecimalField(max_digits=10, decimal_places=2))),
-            paid=Coalesce(Sum('invoice__payments__amount'), Value(0, output_field=DecimalField(max_digits=10, decimal_places=2)))
-        ).annotate(balance=F('billed') - F('paid')).filter(balance__gte=campaign.min_balance)
+            billed=Coalesce(Subquery(billed_sq), Value(0, output_field=DecimalField(max_digits=12, decimal_places=2))),
+            paid=Coalesce(Subquery(paid_sq), Value(0, output_field=DecimalField(max_digits=12, decimal_places=2))),
+        ).annotate(balance=F('billed') - F('paid'))
+        # Enforce strictly positive balances: do not notify 0 or negative
+        try:
+            threshold = float(getattr(campaign, 'min_balance', 0) or 0)
+        except Exception:
+            threshold = 0.0
+        if threshold < 0:
+            threshold = 0.0
+        students = students.filter(balance__gt=threshold)
 
         notifications = []
         # Prepare personalized chat messages only if in-app is selected
@@ -320,12 +353,23 @@ def process_arrears_campaign(campaign_id: int):
         email_failed = 0
         for stu in students.select_related('user', 'klass'):
             klass_name = getattr(getattr(stu, 'klass', None), 'name', '')
+            currency = getattr(settings, 'CURRENCY', 'KES')
+            try:
+                balance_val = float(getattr(stu, 'balance', 0) or 0)
+            except Exception:
+                balance_val = 0.0
+            balance_str = f"{balance_val:,.2f}"
             context = {
                 'student_name': getattr(stu, 'name', ''),
                 'class': klass_name,
-                'balance': getattr(stu, 'balance', ''),
+                'balance': balance_str,
+                'balance_formatted': f"{currency} {balance_str}",
+                'currency': currency,
             }
             msg = render_template(campaign.message, context)
+            tpl = campaign.message or ''
+            if ('{balance' not in tpl) and ('{balance_formatted' not in tpl):
+                msg = f"{msg} Outstanding balance: {currency} {balance_str}."
 
             # In-app
             # Queue in-app notification if enabled
@@ -461,6 +505,67 @@ def queue_message_delivery(message_id: int):
     """Spawn a daemon thread to process message delivery asynchronously."""
     t = threading.Thread(target=process_message_delivery, args=(message_id,), daemon=True)
     t.start()
+
+
+def deliver_message_collect(message_id: int) -> dict:
+    """Synchronously deliver a message via SMS and Email and return per-channel results.
+    Returns dict like:
+    {
+      'message_id': int,
+      'in_app': {'created': True},
+      'sms': [{'user_id': int, 'phone': str, 'ok': bool}],
+      'email': [{'user_id': int, 'email': str, 'ok': bool}],
+    }
+    Does not raise; logs errors and marks ok=False when applicable.
+    """
+    from .models import Message, MessageRecipient
+    results = {
+        'message_id': message_id,
+        'in_app': {'created': False},
+        'sms': [],
+        'email': [],
+    }
+    try:
+        msg = Message.objects.select_related('sender', 'school').get(pk=message_id)
+        # If recipients exist, we consider in-app as created (Message + MessageRecipient rows)
+        has_recipients = MessageRecipient.objects.filter(message_id=msg.id).exists()
+        results['in_app']['created'] = has_recipients
+
+        # Iterate recipients and attempt channel deliveries, collecting outcome
+        recipients = (
+            MessageRecipient.objects
+            .filter(message_id=msg.id)
+            .select_related('user')
+        )
+        subject = f"New message from {getattr(msg.sender, 'username', 'user')}"
+        for r in recipients:
+            u = r.user
+            if not u:
+                continue
+            # SMS
+            phone = getattr(u, 'phone', '')
+            if phone:
+                ok_sms = False
+                try:
+                    ok_sms = send_sms(phone, msg.body)
+                except Exception:
+                    logger.exception("Failed to SMS user %s", getattr(u, 'id', ''))
+                    ok_sms = False
+                results['sms'].append({'user_id': getattr(u, 'id', None), 'phone': phone, 'ok': bool(ok_sms)})
+
+            # Email
+            email = getattr(u, 'email', '')
+            if email:
+                ok_email = False
+                try:
+                    ok_email = send_email_safe(subject, msg.body, email)
+                except Exception:
+                    logger.exception("Failed to email user %s", getattr(u, 'id', ''))
+                    ok_email = False
+                results['email'].append({'user_id': getattr(u, 'id', None), 'email': email, 'ok': bool(ok_email)})
+    except Exception:
+        logger.exception("deliver_message_collect failed for message %s", message_id)
+    return results
 
 
 def create_messages_for_users(school_id: int, sender_id: int, body: str, recipient_user_ids: list[int], system_tag: str | None = None, *, queue_delivery: bool = True):

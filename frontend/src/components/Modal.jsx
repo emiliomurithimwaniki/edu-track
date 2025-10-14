@@ -64,13 +64,15 @@ export default function Modal({ open, onClose, title, children, size = 'md' }){
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        className={`relative bg-white rounded shadow-lg w-full ${sizeClass} p-4 transform scale-95 opacity-0 animate-zoomIn`}
+        className={`relative bg-white rounded shadow-lg w-full ${sizeClass} p-4 transform scale-95 opacity-0 animate-zoomIn max-h-[90vh]`}
       >
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-semibold text-gray-800">{title}</h3>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded" aria-label="Close" data-modal-close>✖</button>
         </div>
-        {children}
+        <div className="overflow-auto max-h-[75vh] pr-1">
+          {children}
+        </div>
       </div>
       <span ref={sentinelEnd} tabIndex={0} />
       <style>{`

@@ -13,7 +13,7 @@ User = get_user_model()
 class SubjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subject
-        fields = ['id','code','name','category','is_priority','school']
+        fields = ['id','code','name','category','is_priority','is_examinable','school']
 
 class SubjectComponentSerializer(serializers.ModelSerializer):
     subject_detail = SubjectSerializer(source='subject', read_only=True)
@@ -68,7 +68,7 @@ class StudentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Student
         fields = [
-            'id','admission_no','name','dob','gender','guardian_id','klass','klass_detail','user','user_id',
+            'id','admission_no','name','dob','gender','upi_number','guardian_id','klass','klass_detail','user','user_id',
             'passport_no','phone','email','address','photo','photo_url',
             'is_graduated','graduation_year'
         ]
@@ -256,6 +256,22 @@ class ExamResultSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExamResult
         fields = ['id','exam','exam_detail','student','subject','subject_detail','component','component_detail','marks','out_of','percentage']
+
+    def validate(self, attrs):
+        # Block results for non-examinable subjects
+        subject = attrs.get('subject') or getattr(self.instance, 'subject', None)
+        if subject is not None:
+            try:
+                # Ensure we have the latest value of is_examinable
+                if hasattr(subject, 'is_examinable'):
+                    examinable = bool(subject.is_examinable)
+                else:
+                    examinable = bool(Subject.objects.filter(pk=subject.pk).values_list('is_examinable', flat=True).first())
+                if not examinable:
+                    raise serializers.ValidationError({'subject': 'This subject is not examinable. Results cannot be recorded.'})
+            except Exception:
+                pass
+        return super().validate(attrs)
 
     def get_percentage(self, obj):
         # Compute percentage based on component.max_marks, else exam.total_marks, else 100

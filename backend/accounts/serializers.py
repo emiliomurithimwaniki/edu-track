@@ -28,9 +28,28 @@ class SchoolSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     school = SchoolSerializer(read_only=True)
+    profile_picture = serializers.ImageField(required=False, allow_null=True)
+    avatar_url = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = [
             "id","username","email","first_name","last_name",
-            "role","phone","school","is_staff","is_superuser","email_verified"
+            "role","phone","school","is_staff","is_superuser","email_verified",
+            "profile_picture","avatar_url",
         ]
+
+    def get_avatar_url(self, obj):
+        url = None
+        try:
+            if getattr(obj, 'profile_picture', None):
+                url = obj.profile_picture.url
+        except Exception:
+            url = None
+        request = self.context.get('request') if isinstance(self.context, dict) else None
+        if url and request:
+            try:
+                return request.build_absolute_uri(url)
+            except Exception:
+                return url
+        return url

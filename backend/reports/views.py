@@ -43,6 +43,9 @@ def summary(request):
         assess_qs = assess_qs.filter(student__klass__school=school)
         exam_results_qs = exam_results_qs.filter(student__klass__school=school)
 
+    # Exclude non-examinable subjects from all exam results based analytics
+    exam_results_qs = exam_results_qs.filter(subject__is_examinable=True)
+
     # Get basic counts efficiently
     since = datetime.today().date() - timedelta(days=30)
     
@@ -168,7 +171,10 @@ def summary(request):
     
     # Class Performance - optimized with annotation using ExamResult
     class_performance = cl_qs.annotate(
-        avg_score=Avg('student__examresult__marks'),
+        avg_score=Avg(
+            'student__examresult__marks',
+            filter=Q(student__examresult__subject__is_examinable=True)
+        ),
         student_count=Count('student', distinct=True)
     ).values('name', 'avg_score', 'student_count')[:10]
     

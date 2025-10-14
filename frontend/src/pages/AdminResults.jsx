@@ -31,9 +31,11 @@ export default function AdminResults(){
     (async () => {
       if (!grade) { setExams([]); return }
       const { data } = await api.get(`/academics/exams/?grade=${encodeURIComponent(grade)}`)
-      setExams(data)
-      // if selected exam not in grade, reset
-      if (data.findIndex(e => String(e.id) === String(selectedExam)) === -1) {
+      // Only allow selection of exams that are published (done & visible)
+      const published = Array.isArray(data) ? data.filter(e => !!e.published) : []
+      setExams(published)
+      // if selected exam not in published exams for grade, reset
+      if (published.findIndex(e => String(e.id) === String(selectedExam)) === -1) {
         setSelectedExam('')
         setSummary(null)
       }

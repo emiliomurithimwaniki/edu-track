@@ -210,15 +210,15 @@ export default function AdminClassProfile(){
             <div className="text-sm text-gray-500">Grade: {klass?.grade_level || '-'} • Stream: {klass?.stream_detail?.name || '-'}</div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => navigate(-1)} className="px-3 py-1.5 rounded border hover:bg-gray-50">Back</button>
-            <Link to="/admin/classes" className="px-3 py-1.5 rounded border hover:bg-gray-50">All Classes</Link>
+            <button onClick={() => navigate(-1)} className="px-3 py-1.5 rounded bg-gray-100 text-gray-800 hover:bg-gray-200">Back</button>
+            <Link to="/admin/classes" className="px-3 py-1.5 rounded bg-blue-100 text-blue-700 hover:bg-blue-200">All Classes</Link>
           </div>
         </div>
 
         {/* Tabs */}
         <div className="bg-white rounded-lg shadow border border-gray-100">
           <div className="px-4 pt-3">
-            <div className="flex gap-2 border-b">
+            <div className="flex gap-1 border-b overflow-x-auto no-scrollbar -mx-2 px-2">
               {[
                 { key: 'class', label: 'Class' },
                 { key: 'subjects', label: 'Subjects' },
@@ -228,7 +228,7 @@ export default function AdminClassProfile(){
                 <button
                   key={t.key}
                   onClick={()=>setActiveTab(t.key)}
-                  className={`px-3 py-2 text-sm border-b-2 -mb-px ${activeTab===t.key ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-600 hover:text-gray-800'}`}
+                  className={`shrink-0 px-3 py-2 text-sm border-b-2 -mb-px rounded-t ${activeTab===t.key ? 'border-blue-600 text-blue-700 bg-blue-50' : 'border-transparent text-gray-600 hover:text-gray-800 hover:bg-gray-50'}`}
                 >{t.label}</button>
               ))}
             </div>
@@ -309,7 +309,7 @@ export default function AdminClassProfile(){
                     <div className="flex items-center justify-between mb-2">
                       <div className="text-sm text-gray-600">Subjects</div>
                       {subjects.length > 0 && (
-                        <button onClick={()=>openAssign(subjects[0]?.id)} className="text-sm px-3 py-1.5 rounded border hover:bg-gray-50">Assign Teacher</button>
+                        <button onClick={()=>openAssign(subjects[0]?.id)} className="text-sm px-3 py-1.5 rounded border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100">Assign Teacher</button>
                       )}
                     </div>
                     {subjects.length === 0 ? (
@@ -319,22 +319,29 @@ export default function AdminClassProfile(){
                         {subjects.map(s => {
                           const a = subjectAssignments[String(s.id)]
                           return (
-                            <div key={s.id} className="flex items-center justify-between border rounded px-3 py-2">
-                              <div className="text-sm">
+                            <div key={s.id} className="grid grid-cols-1 sm:grid-cols-3 items-center gap-2 border rounded-xl px-3 py-2 bg-white">
+                              <div className="min-w-0">
                                 <Link to={`/admin/subjects/${s.id}`} className="inline-flex items-center gap-2 hover:underline">
                                   <span className="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700">{s.code}</span>
-                                  <span className="text-gray-800">{s.name}</span>
+                                  <span className="text-gray-800 truncate">{s.name}</span>
                                 </Link>
                               </div>
-                              <div className="flex items-center gap-3">
-                                <div className="text-sm text-gray-600 min-w-[160px]">
-                                  {a?.teacher_detail ? (
-                                    <span>Teacher: {a.teacher_detail.first_name} {a.teacher_detail.last_name}</span>
-                                  ) : (
-                                    <span className="text-gray-400">No teacher</span>
-                                  )}
-                                </div>
-                                <button onClick={()=>openAssign(s.id)} className="text-blue-700 hover:underline text-sm">{a ? 'Change' : 'Assign'}</button>
+                              <div className="text-sm text-gray-600 min-w-0">
+                                {a?.teacher_detail ? (
+                                  <span className="truncate block">Teacher: {a.teacher_detail.first_name} {a.teacher_detail.last_name}</span>
+                                ) : (
+                                  <span className="text-gray-400">No teacher</span>
+                                )}
+                              </div>
+                              <div className="sm:text-right">
+                                <button
+                                  onClick={()=>openAssign(s.id)}
+                                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm transition-colors ${a
+                                    ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                    : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'}`}
+                                >
+                                  {a ? 'Change' : 'Assign'}
+                                </button>
                               </div>
                             </div>
                           )
@@ -384,30 +391,32 @@ export default function AdminClassProfile(){
 
                 {activeTab === 'results' && (
                   <div className="space-y-3">
-                    <div className="text-sm text-gray-600">Most Recent Exam</div>
+                    <div className="text-xs sm:text-sm text-gray-600">Most Recent Exam</div>
                     {!recentExam ? (
                       <div className="text-sm text-gray-500">No exams found for this class.</div>
                     ) : (
                       <div className="space-y-3">
-                        <div className="flex flex-wrap items-center gap-3">
-                          <div className="px-3 py-1.5 rounded border bg-gray-50"><span className="text-xs text-gray-500">Exam</span> <span className="ml-2 font-medium">{recentExam.name}</span></div>
-                          <div className="px-3 py-1.5 rounded border bg-gray-50"><span className="text-xs text-gray-500">Year</span> <span className="ml-2 font-medium">{recentExam.year}</span></div>
-                          <div className="px-3 py-1.5 rounded border bg-gray-50"><span className="text-xs text-gray-500">Term</span> <span className="ml-2 font-medium">T{recentExam.term}</span></div>
-                          <div className="px-3 py-1.5 rounded border bg-gray-50"><span className="text-xs text-gray-500">Date</span> <span className="ml-2 font-medium">{recentExam.date || '-'}</span></div>
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                          <div className="px-2.5 py-1 rounded border bg-gray-50 text-xs sm:text-sm"><span className="text-[10px] sm:text-xs text-gray-500">Exam</span> <span className="ml-2 font-medium text-xs sm:text-sm">{recentExam.name}</span></div>
+                          <div className="px-2.5 py-1 rounded border bg-gray-50 text-xs sm:text-sm"><span className="text-[10px] sm:text-xs text-gray-500">Year</span> <span className="ml-2 font-medium text-xs sm:text-sm">{recentExam.year}</span></div>
+                          <div className="px-2.5 py-1 rounded border bg-gray-50 text-xs sm:text-sm"><span className="text-[10px] sm:text-xs text-gray-500">Term</span> <span className="ml-2 font-medium text-xs sm:text-sm">T{recentExam.term}</span></div>
+                          <div className="px-2.5 py-1 rounded border bg-gray-50 text-xs sm:text-sm"><span className="text-[10px] sm:text-xs text-gray-500">Date</span> <span className="ml-2 font-medium text-xs sm:text-sm">{recentExam.date || '-'}</span></div>
                         </div>
                         {loadingResults ? (
                           <div className="text-sm text-gray-500">Loading results...</div>
                         ) : (
-                          <div className="overflow-x-auto">
-                            <table className="min-w-full text-sm">
-                              <thead>
+                          <>
+                            <div className="md:hidden text-xs text-gray-500">Swipe horizontally to see all subjects.</div>
+                            <div className="overflow-x-auto rounded-lg border border-gray-200">
+                              <table className="min-w-full text-xs md:text-sm">
+                              <thead className="sticky top-0 bg-gray-50 z-10">
                                 <tr>
-                                  <th className="border px-2 py-1 text-left">Student</th>
+                                  <th className="border px-2 py-1 text-left whitespace-nowrap sticky left-0 bg-gray-50">Student</th>
                                   {recentSummary.subjects.map(s => (
-                                    <th key={s.id} className="border px-2 py-1 text-left">{s.code}</th>
+                                    <th key={s.id} className="border px-2 py-1 text-center whitespace-nowrap">{s.code}</th>
                                   ))}
-                                  <th className="border px-2 py-1 text-left">Total</th>
-                                  <th className="border px-2 py-1 text-left">Average</th>
+                                  <th className="border px-2 py-1 text-right whitespace-nowrap">Total</th>
+                                  <th className="border px-2 py-1 text-right whitespace-nowrap">Average</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -416,21 +425,22 @@ export default function AdminClassProfile(){
                                 ) : (
                                   recentSummary.students.map(st => (
                                     <tr key={st.id} className="hover:bg-gray-50">
-                                      <td className="border px-2 py-1">{st.name}</td>
+                                      <td className="border px-2 py-1 sticky left-0 bg-white">{st.name}</td>
                                       {recentSummary.subjects.map(s => (
-                                        <td key={s.id} className="border px-2 py-1">{st.marks?.[String(s.id)] ?? '-'}</td>
+                                        <td key={s.id} className="border px-2 py-1 text-center">{st.marks?.[String(s.id)] ?? '-'}</td>
                                       ))}
-                                      <td className="border px-2 py-1 font-medium">{st.total}</td>
-                                      <td className="border px-2 py-1">{st.average}</td>
+                                      <td className="border px-2 py-1 font-medium text-right">{st.total}</td>
+                                      <td className="border px-2 py-1 text-right">{typeof st.average === 'number' ? Number(st.average).toFixed(1) : (st.average || '-')}</td>
                                     </tr>
                                   ))
                                 )}
                               </tbody>
-                            </table>
-                          </div>
+                              </table>
+                            </div>
+                          </>
                         )}
                         <div>
-                          <Link to={`/admin/results?exam=${recentExam.id}&grade=${encodeURIComponent(klass?.grade_level || '')}`} className="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700 w-fit">Open in Results</Link>
+                          <Link to={`/admin/results?exam=${recentExam.id}&grade=${encodeURIComponent(klass?.grade_level || '')}`} className="inline-flex items-center gap-2 px-3 py-1.5 rounded bg-violet-600 text-white hover:bg-violet-700 w-fit">Open in Results</Link>
                         </div>
                       </div>
                     )}

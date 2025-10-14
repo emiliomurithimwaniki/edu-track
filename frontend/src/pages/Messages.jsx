@@ -16,11 +16,14 @@ export default function Messages(){
   const [activeUser, setActiveUser] = useState(null)
   const [message, setMessage] = useState('')
   const [sending, setSending] = useState(false)
+  const [fileToSend, setFileToSend] = useState(null)
+  const [filePreview, setFilePreview] = useState(null)
   const [viewTab, setViewTab] = useState('chats') // chats | system | role | broadcast (admin only)
   const [roleTarget, setRoleTarget] = useState('teacher')
   const [roleMessage, setRoleMessage] = useState('')
   const [broadcastMessage, setBroadcastMessage] = useState('')
   const isAdmin = user?.role === 'admin'
+  const isFinance = user?.role === 'finance'
   const roleOptions = [
     { value: 'admin', label: 'Admin' },
     { value: 'teacher', label: 'Teacher' },
@@ -32,7 +35,7 @@ export default function Messages(){
   const allowedRoles = useMemo(() => {
     if (user?.role === 'admin') return ['admin','teacher','finance','student']
     if (user?.role === 'teacher') return ['admin']
-    if (user?.role === 'finance') return ['admin','teacher']
+    if (user?.role === 'finance') return ['admin','teacher','student']
     if (user?.role === 'student') return ['admin','finance']
     return []
   }, [user])
@@ -201,6 +204,33 @@ export default function Messages(){
     return m
   }, [allUsers, userMeta])
 
+  // Helpers for display names and role tags
+  const roleLabelMap = { admin: 'Admin', teacher: 'Teacher', finance: 'Finance', student: 'Student' }
+  const roleBadgeClass = (role)=>{
+    switch(role){
+      case 'admin': return 'bg-purple-50 text-purple-700 border-purple-200'
+      case 'teacher': return 'bg-blue-50 text-blue-700 border-blue-200'
+      case 'finance': return 'bg-emerald-50 text-emerald-700 border-emerald-200'
+      case 'student': return 'bg-amber-50 text-amber-700 border-amber-200'
+      default: return 'bg-gray-50 text-gray-600 border-gray-200'
+    }
+  }
+  const displayFullName = (u)=>{
+    const first = u?.first_name || ''
+    const last = u?.last_name || ''
+    const full = `${first} ${last}`.trim()
+    return full || u?.username || u?.email || `User #${u?.id}`
+  }
+  const avatarUrl = (u)=> u?.avatar_url || u?.profile_image_url || u?.profile_photo_url || u?.photo_url || u?.image_url || u?.avatar || ''
+  const initials = (u)=>{
+    const f = (u?.first_name||u?.username||'').trim()
+    const l = (u?.last_name||'').trim()
+    return `${f.charAt(0)||''}${l.charAt(0)||''}`.toUpperCase() || 'U'
+  }
+  // Attachment helpers
+  const getAttachmentUrl = (m)=> m?.attachment_url || m?.file_url || m?.media_url || m?.attachment || m?.file || ''
+  const isImageUrl = (url)=> typeof url === 'string' && /(\.png|\.jpg|\.jpeg|\.gif|\.webp|\.bmp)$/i.test(url)
+
   // Aggregate unread counts for tabs
   const chatsUnread = useMemo(() => {
     const myId = user?.id
@@ -227,37 +257,58 @@ export default function Messages(){
     }, 0)
   }, [systemMessages, user])
 
-  // Sort users by last message timestamp (desc), place those without messages at the bottom
+  // Filter and sort users. WhatsApp-like: by default show only recent chats ordered by latest message.
   const filteredUsers = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return allUsers
     return allUsers.filter(u => {
-      const name = (u.first_name || u.username || '').toLowerCase()
+      const first = (u.first_name || '').toLowerCase()
+      const last = (u.last_name || '').toLowerCase()
+      const username = (u.username || '').toLowerCase()
       const email = (u.email || '').toLowerCase()
-      return name.includes(q) || email.includes(q)
+      const roleLbl = (roleLabelMap[u.role] || u.role || '').toLowerCase()
+      return first.includes(q) || last.includes(q) || username.includes(q) || email.includes(q) || roleLbl.includes(q)
     })
   }, [allUsers, query])
 
   const sortedUsers = useMemo(() => {
+    const q = query.trim()
+    // Helper to get timestamp and unread
+    const metaTs = (id)=> userMeta.get(id)?.last?.created_at ? new Date(userMeta.get(id).last.created_at).getTime() : 0
+    const metaUnread = (id)=> userMeta.get(id)?.unread || 0
+
+    if (!q){
+      // No search: show recent chats only (participants with any message), sorted by latest
+      const recentIds = Array.from(userMeta.keys())
+      const recentUsers = recentIds
+        .map(id => filteredUsers.find(u => u.id === id) || allUsers.find(u => u.id === id))
+        .filter(Boolean)
+      recentUsers.sort((a,b)=> metaTs(b.id) - metaTs(a.id))
+      return recentUsers
+    }
+    // With search: show directory matches, but sort by latest desc, then unread, then name
     const arr = [...filteredUsers]
-    arr.sort((a, b) => {
-      const la = userMeta.get(a.id)?.last?.created_at ? new Date(userMeta.get(a.id).last.created_at).getTime() : 0
-      const lb = userMeta.get(b.id)?.last?.created_at ? new Date(userMeta.get(b.id).last.created_at).getTime() : 0
+    arr.sort((a,b)=>{
+      const lb = metaTs(b.id)
+      const la = metaTs(a.id)
       if (lb !== la) return lb - la
-      // Tie-breaker: unread desc then name
-      const ua = userMeta.get(a.id)?.unread || 0
-      const ub = userMeta.get(b.id)?.unread || 0
+      const ub = metaUnread(b.id)
+      const ua = metaUnread(a.id)
       if (ub !== ua) return ub - ua
       const na = (a.first_name || a.username || '').toLowerCase()
       const nb = (b.first_name || b.username || '').toLowerCase()
       return na.localeCompare(nb)
     })
     return arr
-  }, [filteredUsers, userMeta])
+  }, [allUsers, filteredUsers, query, userMeta])
 
   // Typing simulation (client-only): show typing for partner occasionally while chat is open
   const [typingMap, setTypingMap] = useState(new Map())
   const [showUsersMobile, setShowUsersMobile] = useState(false)
+  // Forwarding state (admin only)
+  const [forwardSource, setForwardSource] = useState(null) // message object
+  const [forwardRecipients, setForwardRecipients] = useState([]) // ids
+  const [showForwardModal, setShowForwardModal] = useState(false)
   useEffect(() => {
     if (!activeUser) return
     const id = setInterval(() => {
@@ -275,6 +326,13 @@ export default function Messages(){
     }, 5000)
     return () => clearInterval(id)
   }, [activeUser])
+
+  // On mobile, default to users list (inline) when no active chat selected
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.innerWidth < 640 && !activeUser && viewTab !== 'system') {
+      setShowUsersMobile(false)
+    }
+  }, [activeUser, viewTab])
 
   // Mark as read for any messages in this conversation where I'm a recipient and not read
   useEffect(() => {
@@ -316,19 +374,65 @@ export default function Messages(){
 
   const sendToActive = async (e) => {
     e.preventDefault()
-    if (!activeUser || !message.trim()) return
+    const targetIds = (forwardRecipients && forwardRecipients.length>0) ? forwardRecipients : (activeUser? [activeUser.id] : [])
+    if (targetIds.length===0 || (!message.trim() && !fileToSend)) return
     setSending(true)
     try {
-      await api.post('/communications/messages/', {
-        body: message,
-        audience: 'users',
-        recipient_ids: [activeUser.id],
-      })
+      // If a file is selected, attempt multipart upload; otherwise JSON
+      if (fileToSend){
+        // Strategy: try a few field shapes until one succeeds
+        const trySend = async (builder, fileFieldName) => {
+          const fd = new FormData()
+          builder(fd)
+          // attach under chosen field name
+          fd.append(fileFieldName, fileToSend)
+          return api.post('/communications/messages/', fd)
+        }
+        let sent = false
+        let lastErr = null
+        const variants = [
+          // V1: JSON array as recipient_ids
+          (fd)=>{ fd.append('body', message || ''); fd.append('audience','users'); fd.append('recipient_ids', JSON.stringify(targetIds)) },
+          // V2: repeated recipient_ids
+          (fd)=>{ fd.append('body', message || ''); fd.append('audience','users'); for(const id of targetIds){ fd.append('recipient_ids', String(id)) } },
+          // V3: repeated recipient_ids[]
+          (fd)=>{ fd.append('body', message || ''); fd.append('audience','users'); for(const id of targetIds){ fd.append('recipient_ids[]', String(id)) } },
+          // V4: repeated recipients
+          (fd)=>{ fd.append('body', message || ''); fd.append('audience','users'); for(const id of targetIds){ fd.append('recipients', String(id)) } },
+          // V5: omit audience, repeated recipient_ids
+          (fd)=>{ fd.append('body', message || ''); for(const id of targetIds){ fd.append('recipient_ids', String(id)) } },
+          // V6: single 'recipient' if exactly one target
+          (fd)=>{ fd.append('body', message || ''); if(targetIds.length===1){ fd.append('recipient', String(targetIds[0])) } },
+          // V7: JSON under 'to_ids'
+          (fd)=>{ fd.append('body', message || ''); fd.append('to_ids', JSON.stringify(targetIds)) },
+          // V8: repeated 'to'
+          (fd)=>{ fd.append('body', message || ''); for(const id of targetIds){ fd.append('to', String(id)) } },
+        ]
+        const fileFields = ['attachment','file','upload','media']
+        for (const field of fileFields){
+          for (const v of variants){
+            try { await trySend(v, field); sent = true; break } catch (err){ lastErr = err; try{ console.error('Attachment send variant failed', { fileField: field, status: err?.response?.status, data: err?.response?.data }) }catch{} }
+          }
+          if (sent) break
+        }
+        if(!sent){ throw lastErr || new Error('Attachment send failed') }
+      } else {
+        await api.post('/communications/messages/', {
+          body: message,
+          audience: 'users',
+          recipient_ids: targetIds,
+        })
+      }
       setMessage('')
+      setFileToSend(null)
+      if (filePreview){ URL.revokeObjectURL(filePreview); setFilePreview(null) }
+      setForwardSource(null)
+      setForwardRecipients([])
       await loadMessages(true)
       showSuccess('Message sent', `Your message to ${activeUser.first_name || activeUser.username} was sent.`)
     } catch (e) {
-      const msg = e?.response?.data?.detail || e?.message || 'Failed to send'
+      const serverMsg = e?.response?.data?.detail || e?.response?.data?.error || e?.response?.data?.message
+      const msg = serverMsg || e?.message || 'Failed to send'
       showError('Send failed', msg)
     } finally { setSending(false) }
   }
@@ -366,6 +470,7 @@ export default function Messages(){
   // Chat scroll management
   const chatRef = useRef(null)
   const atBottomRef = useRef(true)
+  const messageInputRef = useRef(null)
   useEffect(() => {
     const el = chatRef.current
     if (!el) return
@@ -376,6 +481,14 @@ export default function Messages(){
     el.addEventListener('scroll', onScroll)
     return () => el.removeEventListener('scroll', onScroll)
   }, [])
+
+  // Auto-grow textarea for composer
+  useEffect(() => {
+    const t = messageInputRef.current
+    if (!t) return
+    t.style.height = 'auto'
+    t.style.height = Math.min(t.scrollHeight, 136) + 'px' // up to ~6 lines
+  }, [message])
 
   // When conversation updates: auto-scroll only if user is already near bottom or last message is mine
   const lastMsg = conversation.length ? conversation[conversation.length - 1] : null
@@ -406,10 +519,12 @@ export default function Messages(){
               <span className="text-[10px] bg-blue-600 text-white rounded-full px-2 py-0.5">{systemUnread>99?'99+':systemUnread}</span>
             )}
           </button>
-          {isAdmin && (
+          {(isAdmin || isFinance) && (
             <>
               <button onClick={()=>setViewTab('role')} className={`flex-1 px-3 py-2 text-sm ${viewTab==='role'?'border-b-2 border-blue-600 font-medium':''}`}>Role</button>
-              <button onClick={()=>setViewTab('broadcast')} className={`flex-1 px-3 py-2 text-sm ${viewTab==='broadcast'?'border-b-2 border-blue-600 font-medium':''}`}>Broadcast</button>
+              {isAdmin && (
+                <button onClick={()=>setViewTab('broadcast')} className={`flex-1 px-3 py-2 text-sm ${viewTab==='broadcast'?'border-b-2 border-blue-600 font-medium':''}`}>Broadcast</button>
+              )}
             </>
           )}
         </div>
@@ -445,8 +560,18 @@ export default function Messages(){
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-100 flex items-center justify-center text-xs text-gray-600">
+                        {avatarUrl(u) ? (
+                          <img src={avatarUrl(u)} alt={displayFullName(u)} className="w-full h-full object-cover" />
+                        ) : (
+                          <span>{initials(u)}</span>
+                        )}
+                      </div>
                       <span className={`w-2 h-2 rounded-full ${online? 'bg-emerald-500':'bg-gray-300'}`}></span>
-                      <div className="font-medium text-sm">{u.first_name || u.username}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium text-sm">{displayFullName(u)}</div>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${roleBadgeClass(u.role)}`}>{roleLabelMap[u.role] || u.role}</span>
+                      </div>
                     </div>
                     {unread>0 && (
                       <span className="text-[10px] bg-blue-600 text-white rounded-full px-2 py-0.5">{unread}</span>
@@ -469,7 +594,7 @@ export default function Messages(){
           </div>
         )}
 
-        {isAdmin && viewTab === 'role' && (
+        {(isAdmin || isFinance) && viewTab === 'role' && (
           <form onSubmit={sendRole} className="p-3 space-y-2">
             <label className="text-xs text-gray-600">Send to role</label>
             <select className="w-full border rounded px-2 py-1" value={roleTarget} onChange={e=>setRoleTarget(e.target.value)}>
@@ -490,20 +615,81 @@ export default function Messages(){
       </aside>
 
       {/* Right: Chat thread or System feed */}
-      <section className="flex-1 flex flex-col">
+      {/* Mobile users list as main view when no chat is selected */}
+      {!activeUser && viewTab!== 'system' && (
+        <div className="sm:hidden flex-1 flex flex-col">
+          <div className="h-12 border-b px-3 flex items-center justify-between sticky top-0 bg-white z-10">
+            <div className="font-medium">Users</div>
+          </div>
+          <div className="p-3 border-b">
+            <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search users..." className="w-full border rounded px-3 py-2" />
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {sortedUsers.map(u => {
+              const meta = userMeta.get(u.id)
+              const lastText = meta?.last?.body ? String(meta.last.body).slice(0, 50) : ''
+              const unread = meta?.unread || 0
+              const online = presenceMap.get(u.id)
+              return (
+                <button key={u.id} onClick={()=>{ setActiveUser(u) }} className="w-full text-left px-3 py-2 border-b hover:bg-gray-50">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-100 flex items-center justify-center text-xs text-gray-600">
+                        {avatarUrl(u) ? (
+                          <img src={avatarUrl(u)} alt={displayFullName(u)} className="w-full h-full object-cover" />
+                        ) : (
+                          <span>{initials(u)}</span>
+                        )}
+                      </div>
+                      <span className={`w-2 h-2 rounded-full ${online? 'bg-emerald-500':'bg-gray-300'}`}></span>
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium text-sm">{displayFullName(u)}</div>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${roleBadgeClass(u.role)}`}>{roleLabelMap[u.role] || u.role}</span>
+                      </div>
+                    </div>
+                    {unread>0 && (<span className="text-[10px] bg-blue-600 text-white rounded-full px-2 py-0.5">{unread}</span>)}
+                  </div>
+                  <div className="text-xs text-gray-500 truncate">{lastText || <span className="italic text-gray-400">No messages</span>}</div>
+                </button>
+              )
+            })}
+            {sortedUsers.length===0 && (<div className="p-3 text-sm text-gray-500">No users</div>)}
+          </div>
+        </div>
+      )}
+
+      {/* Chat section */}
+      <section className={`relative flex-1 flex flex-col ${!activeUser && viewTab!=='system' ? 'hidden sm:flex' : ''}`}>
         <div className="h-14 border-b px-2 sm:px-4 flex items-center justify-between sticky top-0 bg-white z-10">
           <div className="font-medium">
             <div className="flex items-center gap-2">
-              <button className="sm:hidden px-2 py-1 rounded border" onClick={()=>setShowUsersMobile(true)}>Users</button>
-              <span>{viewTab==='system' ? 'System' : (activeUser ? (activeUser.first_name || activeUser.username) : 'Select a user')}</span>
+              {activeUser && (
+                <button className="sm:hidden px-2 py-1 rounded border" onClick={()=>setActiveUser(null)} aria-label="Back">
+                  ←
+                </button>
+              )}
+              {viewTab==='system' ? (
+                <span>System</span>
+              ) : activeUser ? (
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-100 flex items-center justify-center text-xs text-gray-600">
+                    {avatarUrl(activeUser) ? (
+                      <img src={avatarUrl(activeUser)} alt={displayFullName(activeUser)} className="w-full h-full object-cover" />
+                    ) : (
+                      <span>{initials(activeUser)}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span>{displayFullName(activeUser)}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${roleBadgeClass(activeUser.role)}`}>{roleLabelMap[activeUser.role] || activeUser.role}</span>
+                  </div>
+                </div>
+              ) : (
+                <span>Select a user</span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2 text-xs text-gray-500">
-            {viewTab==='system' ? (
-              <button onClick={()=>loadSystem()} className="px-2 py-1 rounded border hover:bg-gray-50">Load newer</button>
-            ) : (
-              <button onClick={()=>loadMessages(true)} className="px-2 py-1 rounded border hover:bg-gray-50">Load newer</button>
-            )}
             {isSyncing && (
               <span className="inline-flex items-center gap-1">
                 <svg className="animate-spin h-4 w-4 text-gray-400" viewBox="0 0 24 24">
@@ -541,9 +727,37 @@ export default function Messages(){
                 const mine = m.sender === user?.id
                 return (
                   <div key={m.id} className={`flex ${mine? 'justify-end':'justify-start'}`}>
-                    <div className={`max-w-[85%] sm:max-w-[70%] px-3 py-2 rounded-lg shadow-sm text-sm whitespace-pre-wrap ${mine? 'bg-blue-600 text-white':'bg-white border'}`}>
+                    <div className={`group relative max-w-[85%] sm:max-w-[70%] px-3 py-2 rounded-lg shadow-sm text-sm whitespace-pre-wrap ${mine? 'bg-blue-600 text-white':'bg-white border'}`}>
+                      {(() => {
+                        const url = getAttachmentUrl(m)
+                        if (url) {
+                          return (
+                            <div className={`mb-1 ${mine? 'text-white':''}`}>
+                              {isImageUrl(url) ? (
+                                <img src={url} alt="attachment" className="max-h-56 rounded border border-gray-200/70" />
+                              ) : (
+                                <a href={url} target="_blank" rel="noreferrer" className={`inline-flex items-center gap-2 px-2 py-1 rounded border ${mine? 'border-white/40 bg-white/10':'border-gray-200 bg-gray-50'} hover:underline`}>
+                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M16.5 6.75v7.5a4.5 4.5 0 11-9 0V5.25a3 3 0 116 0v8.25a1.5 1.5 0 11-3 0V6.75" /></svg>
+                                  <span className="text-xs">Open attachment</span>
+                                </a>
+                              )}
+                            </div>
+                          )
+                        }
+                        return null
+                      })()}
                       {m.body}
                       <div className={`mt-1 text-[10px] ${mine? 'text-white/80':'text-gray-500'}`}>{new Date(m.created_at).toLocaleString()}</div>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          title="Forward"
+                          className={`absolute -right-8 top-1/2 -translate-y-1/2 hidden sm:inline-flex items-center justify-center w-7 h-7 rounded-full border bg-white text-gray-600 shadow-sm group-hover:flex ${mine? '':'border-gray-200'}`}
+                          onClick={()=>{ setForwardSource(m); setMessage(m.body || ''); setShowForwardModal(true) }}
+                        >
+                          ↪
+                        </button>
+                      )}
                     </div>
                   </div>
                 )
@@ -556,18 +770,147 @@ export default function Messages(){
           <span />
         </div>
         {viewTab!=='system' && (
-        <form onSubmit={sendToActive} className="h-16 border-t p-2 flex gap-2 sticky bottom-0 bg-white">
-          <input
+        <form onSubmit={sendToActive} className="min-h-16 border-t p-2 flex items-center gap-2 sticky bottom-0 bg-white">
+          {/* Forward banner */}
+          {isAdmin && forwardSource && (
+            <div className="absolute -top-8 left-0 right-0 px-2">
+              <div className="mx-2 mb-1 flex items-center justify-between text-xs text-gray-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                <div className="truncate">Forwarding: <span className="font-medium">{(forwardSource.body||'').slice(0,60)}</span> {forwardRecipients.length>0 && <span>• to {forwardRecipients.length} recipient(s)</span>}</div>
+                <div className="flex items-center gap-2">
+                  <button type="button" className="underline" onClick={()=>setShowForwardModal(true)}>Change</button>
+                  <button type="button" className="text-rose-700" onClick={()=>{ setForwardSource(null); setForwardRecipients([]) }}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
+          {/* WhatsApp-like half-screen preview */}
+          {fileToSend && (
+            <div className="fixed inset-x-0 bottom-[4.5rem] z-40 sm:absolute sm:inset-x-2 sm:bottom-[4.5rem] sm:z-20">
+              <div className="mx-auto max-w-4xl px-2 sm:max-w-none sm:mx-0 sm:px-0">
+                <div className="h-[50vh] sm:h-[55vh] rounded-xl border shadow-md bg-white overflow-hidden flex">
+                  {filePreview ? (
+                    <div className="flex-1 bg-black/5 flex items-center justify-center">
+                      <img src={filePreview} alt="preview" className="max-h-full max-w-full object-contain" />
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center">
+                      <div className="w-24 h-24 rounded-xl border bg-gray-50 flex items-center justify-center">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-10 h-10 text-gray-500"><path d="M9 12h6M9 16h6M9 8h6"/></svg>
+                      </div>
+                    </div>
+                  )}
+                  <div className="w-48 hidden sm:flex flex-col border-l bg-gray-50">
+                    <div className="p-3 border-b">
+                      <div className="text-sm font-medium break-all line-clamp-2">{fileToSend.name}</div>
+                      <div className="text-xs text-gray-500">{(fileToSend.type||'').toString()} • {Math.ceil(fileToSend.size/1024)} KB</div>
+                    </div>
+                    <div className="p-3 mt-auto">
+                      <button type="button" className="w-full px-3 py-2 rounded border" onClick={()=>{ setFileToSend(null); if(filePreview){ URL.revokeObjectURL(filePreview); setFilePreview(null) } }}>Remove</button>
+                    </div>
+                  </div>
+                  <button type="button" aria-label="Close preview" className="absolute top-2 right-3 px-2 py-1 rounded bg-white/90 border shadow" onClick={()=>{ setFileToSend(null); if(filePreview){ URL.revokeObjectURL(filePreview); setFilePreview(null) } }}>✕</button>
+                </div>
+              </div>
+            </div>
+          )}
+          <textarea
+            ref={messageInputRef}
+            rows={1}
             value={message}
             onChange={e=>setMessage(e.target.value)}
+            onInput={(e)=>{
+              const t = e.currentTarget; t.style.height='auto'; t.style.height=Math.min(t.scrollHeight,136)+'px'
+            }}
             placeholder={activeUser? 'Type a message':'Select a user to start chatting'}
-            className="flex-1 border rounded px-3"
+            className={`flex-1 resize-none rounded-2xl px-4 py-2.5 bg-gray-50 border ${activeUser? 'border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500':'border-gray-200'} shadow-inner text-[15px] placeholder:text-gray-400`}
             disabled={!activeUser}
           />
-          <button disabled={!activeUser || sending || !message.trim()} className="px-4 rounded bg-blue-600 text-white disabled:opacity-50">{sending? 'Sending…':'Send'}</button>
+          {/* Attach */}
+          <label className={`flex items-center justify-center rounded-full w-11 h-11 shrink-0 cursor-pointer border ${!activeUser? 'opacity-50 cursor-not-allowed':''}`} title="Attach file">
+            <input
+              type="file"
+              className="hidden"
+              disabled={!activeUser}
+              accept="image/*,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/zip"
+              onChange={(e)=>{
+                const f = e.target.files && e.target.files[0]
+                if (f){ setFileToSend(f); try{ setFilePreview(URL.createObjectURL(f)) }catch{ setFilePreview(null) } }
+                // allow selecting the same file again next time
+                try{ e.target.value = '' }catch{}
+              }}
+            />
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 text-gray-600">
+              <path d="M16.5 6.75v7.5a4.5 4.5 0 11-9 0V5.25a3 3 0 116 0v8.25a1.5 1.5 0 11-3 0V6.75" stroke="currentColor" strokeWidth="1.5" fill="none"/>
+            </svg>
+          </label>
+          {/* Preview chip */}
+          {fileToSend && (
+            <div className="hidden sm:flex items-center gap-2 px-2 py-1 rounded-full border bg-gray-50 text-xs text-gray-700">
+              {filePreview ? (
+                <img src={filePreview} alt="preview" className="w-6 h-6 rounded object-cover" onError={()=>setFilePreview(null)} />
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-5 h-5 text-gray-500"><path d="M9 12h6M9 16h6M9 8h6"/></svg>
+              )}
+              <span className="max-w-[140px] truncate">{fileToSend.name}</span>
+              <button type="button" className="px-1 text-gray-500 hover:text-red-600" onClick={()=>{ setFileToSend(null); if(filePreview){ URL.revokeObjectURL(filePreview); setFilePreview(null) } }} aria-label="Remove attachment">×</button>
+            </div>
+          )}
+          <button
+            disabled={(forwardRecipients.length===0 && !activeUser) || sending || (!message.trim() && !fileToSend)}
+            aria-label="Send message"
+            className={`flex items-center justify-center rounded-full w-11 h-11 shrink-0 transition ${((forwardRecipients.length===0 && !activeUser) || (!message.trim() && !fileToSend))? 'bg-gray-300 text-white cursor-not-allowed':'bg-blue-600 hover:bg-blue-700 text-white'} ${sending? 'opacity-70':''}`}
+          >
+            {sending ? (
+              <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+              </svg>
+            )}
+          </button>
         </form>
         )}
       </section>
+
+      {/* Forward recipients modal */}
+      {isAdmin && showForwardModal && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/40" onClick={()=>setShowForwardModal(false)} />
+          <div className="absolute inset-x-0 top-10 mx-auto w-[92%] max-w-md bg-white rounded-xl border shadow-xl">
+            <div className="p-4 border-b flex items-center justify-between">
+              <div className="font-medium">Forward to users</div>
+              <button className="px-2 py-1 rounded border" onClick={()=>setShowForwardModal(false)}>Close</button>
+            </div>
+            <div className="p-3 border-b">
+              <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search users..." className="w-full border rounded px-3 py-2" />
+            </div>
+            <div className="max-h-80 overflow-auto p-2 space-y-1">
+              {sortedUsers.filter(u=>u.id!==user?.id).map(u=>{
+                const checked = forwardRecipients.includes(u.id)
+                return (
+                  <label key={u.id} className="flex items-center gap-2 p-2 rounded hover:bg-gray-50 cursor-pointer">
+                    <input type="checkbox" checked={checked} onChange={(e)=>{
+                      setForwardRecipients(prev=> e.target.checked ? [...new Set([...prev, u.id])] : prev.filter(id=>id!==u.id))
+                    }} />
+                    <span className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-gray-100 flex items-center justify-center text-xs text-gray-600">{(u.first_name||u.username||'U')[0].toUpperCase()}</span>
+                      <span className="text-sm">{displayFullName(u)}</span>
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${roleBadgeClass(u.role)}`}>{roleLabelMap[u.role] || u.role}</span>
+                    </span>
+                  </label>
+                )
+              })}
+              {sortedUsers.length===0 && <div className="text-sm text-gray-500 p-2">No users</div>}
+            </div>
+            <div className="p-3 border-t flex items-center justify-end gap-2">
+              <button className="px-3 py-1.5 rounded border" onClick={()=>{ setShowForwardModal(false) }}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Mobile slide-over for Users */}
       {showUsersMobile && (

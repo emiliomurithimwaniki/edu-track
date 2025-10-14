@@ -145,6 +145,53 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         data.sort(key=lambda x: x['balance'], reverse=True)
         return Response(data)
 
+    @action(detail=False, methods=['get'], url_path='arrears/export')
+    def arrears_export(self, request):
+        """Export arrears data as CSV. Accepts same filters as arrears: klass, min_balance."""
+        import csv
+        from django.http import HttpResponse
+        school = getattr(getattr(request, 'user', None), 'school', None)
+        klass_id = request.query_params.get('klass')
+        try:
+            min_balance = float(request.query_params.get('min_balance', 0))
+        except Exception:
+            min_balance = 0
+
+        stu_qs = Student.objects.all()
+        if school:
+            stu_qs = stu_qs.filter(klass__school=school)
+        if klass_id:
+            stu_qs = stu_qs.filter(klass_id=klass_id)
+
+        rows = []
+        for stu in stu_qs:
+            inv_qs = Invoice.objects.filter(student=stu)
+            if school:
+                inv_qs = inv_qs.filter(student__klass__school=school)
+            total_billed = inv_qs.aggregate(s=Sum('amount'))['s'] or 0
+            pay_qs = Payment.objects.filter(invoice__student=stu)
+            if school:
+                pay_qs = pay_qs.filter(invoice__student__klass__school=school)
+            total_paid = pay_qs.aggregate(s=Sum('amount'))['s'] or 0
+            balance = float(total_billed or 0) - float(total_paid or 0)
+            if balance > min_balance:
+                rows.append([
+                    stu.id,
+                    stu.name,
+                    str(getattr(stu, 'klass', '') or ''),
+                    float(total_billed or 0),
+                    float(total_paid or 0),
+                    float(balance or 0),
+                ])
+
+        resp = HttpResponse(content_type='text/csv')
+        resp['Content-Disposition'] = 'attachment; filename="arrears.csv"'
+        w = csv.writer(resp)
+        w.writerow(['Student ID','Student Name','Class','Total Billed','Total Paid','Balance'])
+        for r in rows:
+            w.writerow(r)
+        return resp
+
     @action(detail=False, methods=['get'], url_path='summary')
     def summary(self, request):
         """
@@ -308,6 +355,78 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             'invoice': InvoiceSerializer(invoice, context={'request': request}).data,
         }, status=201)
 
+    @action(detail=False, methods=['post'], url_path='pay_student', permission_classes=[IsFinanceOrAdmin])
+    def pay_student(self, request):
+        """Apply a lump-sum payment to a student's outstanding invoices (FIFO).
+        Body: { student: <id>, amount: number, method?: 'mpesa'|'bank'|'cash', reference?: string }
+        Returns { created_payments: [ids], amount_allocated, amount_unallocated }
+        """
+        try:
+            student_id = int(request.data.get('student'))
+        except (TypeError, ValueError):
+            return Response({'detail': 'student is required'}, status=400)
+        # Ensure student exists and (if applicable) belongs to the same school
+        school = getattr(getattr(request, 'user', None), 'school', None)
+        stu_qs = Student.objects.filter(id=student_id)
+        if school:
+            stu_qs = stu_qs.filter(klass__school=school)
+        if not stu_qs.exists():
+            return Response({'detail': 'Student not found'}, status=404)
+        try:
+            amount = float(request.data.get('amount', 0))
+        except (TypeError, ValueError):
+            return Response({'detail': 'Invalid amount'}, status=400)
+        if amount <= 0:
+            return Response({'detail': 'Amount must be greater than 0'}, status=400)
+
+        method = request.data.get('method') or 'cash'
+        reference = request.data.get('reference') or ''
+
+        inv_qs = Invoice.objects.filter(student_id=student_id).order_by('created_at', 'id')
+        if school:
+            inv_qs = inv_qs.filter(student__klass__school=school)
+
+        remaining = amount
+        created_ids = []
+
+        for inv in inv_qs:
+            if remaining <= 0:
+                break
+            # compute remaining on invoice
+            paid_so_far = float(inv.payments.aggregate(s=Sum('amount'))['s'] or 0)
+            inv_balance = float(inv.amount) - paid_so_far
+            if inv_balance <= 0:
+                # already settled
+                continue
+            alloc = min(remaining, inv_balance)
+            try:
+                pay = Payment.objects.create(
+                    invoice=inv,
+                    amount=float(alloc),
+                    method=method,
+                    reference=reference,
+                    recorded_by=request.user if getattr(request, 'user', None) and request.user.is_authenticated else None,
+                )
+            except Exception as e:
+                return Response({'detail': f'Failed to create payment: {e}'}, status=500)
+            created_ids.append(pay.id)
+            remaining -= alloc
+            # update invoice status
+            new_paid = paid_so_far + float(alloc)
+            if new_paid >= float(inv.amount):
+                inv.status = 'paid'
+            elif new_paid > 0:
+                inv.status = 'partial'
+            else:
+                inv.status = 'unpaid'
+            inv.save(update_fields=['status'])
+
+        return Response({
+            'created_payments': created_ids,
+            'amount_allocated': float(amount - remaining),
+            'amount_unallocated': float(remaining),
+        }, status=201)
+
     @action(detail=True, methods=['post'], url_path='stk_push', permission_classes=[permissions.IsAuthenticated])
     def stk_push(self, request, pk=None):
         """Initiate an Mpesa STK push for this invoice.
@@ -405,7 +524,179 @@ class PaymentViewSet(viewsets.ModelViewSet):
         school = getattr(getattr(self.request, 'user', None), 'school', None)
         if school:
             qs = qs.filter(invoice__student__klass__school=school)
+        # Optional filters via query params
+        params = self.request.query_params
+        # Filter by class id
+        klass_id = params.get('klass')
+        if klass_id:
+            qs = qs.filter(invoice__student__klass_id=klass_id)
+        # Filter by payment method (accepts case-insensitive values like CASH, Mpesa, bank)
+        method = params.get('method')
+        if method:
+            qs = qs.filter(method__iexact=str(method).strip())
+        # Date range (inclusive) on created_at
+        # Accept aliases date_from/date_to used by frontend
+        start_date = params.get('start_date') or params.get('date_from')
+        end_date = params.get('end_date') or params.get('date_to')
+        from datetime import datetime
+        from django.utils import timezone
+        try:
+            if start_date:
+                start = timezone.make_aware(datetime.strptime(start_date, '%Y-%m-%d'))
+                qs = qs.filter(created_at__gte=start)
+        except Exception:
+            pass
+        try:
+            if end_date:
+                end = timezone.make_aware(datetime.strptime(end_date, '%Y-%m-%d'))
+                # include entire day
+                from datetime import timedelta
+                qs = qs.filter(created_at__lt=end + timedelta(days=1))
+        except Exception:
+            pass
         return qs
+
+    @action(detail=False, methods=['get'], url_path='export')
+    def export_csv(self, request):
+        """Export filtered payments as CSV for download/print.
+        Accepts same query params as list plus: klass, start_date, end_date.
+        """
+        import csv
+        from django.http import HttpResponse
+        qs = self.filter_queryset(self.get_queryset()).order_by('created_at')
+        resp = HttpResponse(content_type='text/csv')
+        resp['Content-Disposition'] = 'attachment; filename="payments.csv"'
+        w = csv.writer(resp)
+        w.writerow(['Payment ID','Date','Amount','Method','Reference','Invoice ID','Student ID','Student Name','Class'])
+        for p in qs:
+            stu = getattr(p.invoice, 'student', None)
+            w.writerow([
+                p.id,
+                getattr(p, 'created_at', ''),
+                float(getattr(p, 'amount', 0) or 0),
+                getattr(p, 'method', ''),
+                getattr(p, 'reference', ''),
+                getattr(p.invoice, 'id', ''),
+                getattr(stu, 'id', ''),
+                getattr(stu, 'name', ''),
+                str(getattr(stu, 'klass', '') or ''),
+            ])
+        return resp
+
+    @action(detail=True, methods=['get'], url_path='receipt')
+    def receipt(self, request, pk=None):
+        """Return structured data suitable for rendering/printing a payment receipt.
+        Frontend can format this as a printable page.
+        """
+        try:
+            pay = self.get_queryset().get(pk=pk)
+        except Payment.DoesNotExist:
+            return Response({'detail': 'Payment not found'}, status=404)
+        inv = pay.invoice
+        stu = inv.student if inv else None
+        school = getattr(getattr(stu, 'klass', None), 'school', None)
+        # Compute invoice and student balances
+        paid_on_invoice = 0.0
+        if inv:
+            from django.db.models import Sum as _Sum
+            paid_on_invoice = float(inv.payments.aggregate(s=_Sum('amount'))['s'] or 0)
+        invoice_amount = float(getattr(inv, 'amount', 0) or 0)
+        invoice_balance = max(0.0, invoice_amount - paid_on_invoice)
+
+        stu_total_billed = 0.0
+        stu_total_paid = 0.0
+        if stu:
+            from django.db.models import Sum as _Sum
+            stu_total_billed = float(Invoice.objects.filter(student=stu).aggregate(s=_Sum('amount'))['s'] or 0)
+            stu_total_paid = float(Payment.objects.filter(invoice__student=stu).aggregate(s=_Sum('amount'))['s'] or 0)
+        student_balance = max(0.0, stu_total_billed - stu_total_paid)
+
+        # Current term billed/paid and balances to compute arrears
+        current_term_billed = 0.0
+        current_term_paid = 0.0
+        current_term_balance = 0.0
+        arrears_balance = 0.0
+        try:
+            if inv and stu and inv.year and inv.term:
+                from django.db.models import Sum as _Sum
+                invs_this_term = Invoice.objects.filter(student=stu, year=inv.year, term=inv.term)
+                current_term_billed = float(invs_this_term.aggregate(s=_Sum('amount'))['s'] or 0)
+                pays_this_term = Payment.objects.filter(invoice__in=invs_this_term)
+                current_term_paid = float(pays_this_term.aggregate(s=_Sum('amount'))['s'] or 0)
+                current_term_balance = max(0.0, current_term_billed - current_term_paid)
+                arrears_balance = max(0.0, student_balance - current_term_balance)
+        except Exception:
+            pass
+
+        # Prepare school details (including absolute logo URL if available)
+        def school_payload(school_obj):
+            if not school_obj:
+                return {'id': None, 'name': None}
+            try:
+                logo_url = school_obj.logo.url if getattr(school_obj, 'logo', None) else None
+                if logo_url and request:
+                    try:
+                        logo_url = request.build_absolute_uri(logo_url)
+                    except Exception:
+                        pass
+            except Exception:
+                logo_url = None
+            return {
+                'id': getattr(school_obj, 'id', None),
+                'name': str(school_obj) if school_obj else None,
+                'address': getattr(school_obj, 'address', None),
+                'motto': getattr(school_obj, 'motto', None),
+                'logo_url': logo_url,
+            }
+
+        data = {
+            'receipt_no': f"RCPT-{pay.id}",
+            'date': getattr(pay, 'created_at', None),
+            'amount': float(pay.amount),
+            'method': pay.method,
+            'reference': pay.reference,
+            'recorded_by': getattr(getattr(pay, 'recorded_by', None), 'id', None),
+            'recorded_by_name': (lambda u: (
+                (getattr(u, 'name', None) or getattr(u, 'full_name', None) or
+                 (getattr(u, 'get_full_name', lambda: '')() or getattr(u, 'get_username', lambda: '')()) or str(u))
+                if u else None))(getattr(pay, 'recorded_by', None)),
+            'invoice': inv.id if inv else None,
+            'invoice_amount': invoice_amount if inv else None,
+            'invoice_paid': paid_on_invoice,
+            'invoice_balance': invoice_balance,
+            'student': {
+                'id': getattr(stu, 'id', None),
+                'name': getattr(stu, 'name', None),
+                'class': str(getattr(stu, 'klass', '') or ''),
+                'admission_no': getattr(stu, 'admission_no', None),
+            },
+            'school': school_payload(school),
+            'student_total_billed': stu_total_billed,
+            'student_total_paid': stu_total_paid,
+            'student_balance': student_balance,
+            'current_term_billed': current_term_billed,
+            'current_term_paid': current_term_paid,
+            'current_term_balance': current_term_balance,
+            'arrears_balance': arrears_balance,
+        }
+
+        # Include fee assignments for the student's class for the invoice's period
+        try:
+            if inv and stu and getattr(stu, 'klass_id', None) and inv.year and inv.term:
+                qs = ClassFee.objects.filter(klass_id=stu.klass_id, year=inv.year, term=inv.term).select_related('fee_category')
+                data['fee_assignments'] = [
+                    {
+                        'category': getattr(cf.fee_category, 'name', None),
+                        'amount': float(cf.amount or 0),
+                        'year': cf.year,
+                        'term': cf.term,
+                        'due_date': cf.due_date,
+                    }
+                    for cf in qs
+                ]
+        except Exception:
+            pass
+        return Response(data)
 
 
 class FeeCategoryViewSet(viewsets.ModelViewSet):
@@ -463,6 +754,33 @@ class ClassFeeViewSet(viewsets.ModelViewSet):
                 inv.amount = class_fee.amount
                 inv.due_date = class_fee.due_date
                 inv.save(update_fields=['amount', 'due_date'])
+
+    def perform_update(self, serializer):
+        """When a ClassFee is updated, ensure all affected students' invoices are
+        created/updated so student balances always reflect all assignments for their class.
+        """
+        instance = serializer.save()
+        students = Student.objects.filter(klass=instance.klass)
+        for stu in students:
+            inv, created = Invoice.objects.get_or_create(
+                student=stu,
+                category=instance.fee_category,
+                year=instance.year,
+                term=instance.term,
+                defaults={
+                    'amount': instance.amount,
+                    'due_date': instance.due_date,
+                    'status': 'unpaid',
+                }
+            )
+            if not created:
+                updated = False
+                if inv.amount != instance.amount:
+                    inv.amount = instance.amount; updated = True
+                if inv.due_date != instance.due_date:
+                    inv.due_date = instance.due_date; updated = True
+                if updated:
+                    inv.save(update_fields=['amount','due_date'])
 
     def create(self, request, *args, **kwargs):
         """Support assigning the same fee to multiple classes by accepting a

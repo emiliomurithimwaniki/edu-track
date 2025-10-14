@@ -142,31 +142,34 @@ export default function TeacherTimetableView(){
           }
         `}</style>
 
-        <div className="flex items-center justify-between mb-4 no-print">
+        <div className="flex items-center justify-between mb-4 gap-2 flex-wrap no-print">
           <div>
             <h1 className="text-2xl font-extrabold text-gray-900">Teacher Timetable</h1>
             <div className="text-base text-gray-700">Plan: <span className="font-semibold">{plan?.name||'-'}</span></div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
             <button className="px-3 py-1.5 rounded-lg border border-gray-200 bg-white text-sm hover:bg-gray-50" onClick={()=>window.print()}>Print</button>
           </div>
         </div>
 
         <div id="print-area">
-          <div className="flex flex-wrap items-center gap-8 mb-3 text-[15px]">
-            <div className="flex items-center gap-3">
-              <div>Teacher: <span className="font-bold text-lg">{teacherName || 'Select a teacher'}</span></div>
-              <div className="no-print">
-                <select
-                  value={teacherId||''}
-                  onChange={(e)=>setTeacherId(e.target.value? Number(e.target.value): null)}
-                  className="rounded-lg border-gray-300 px-3 py-2 text-sm shadow-sm bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 min-w-[260px]"
-                >
-                  <option value="">Select teacher</option>
-                  {teachers.map(t=> (
-                    <option key={t.id} value={t.id}>{displayTeacherName(t) || `Teacher #${t.id}`}</option>
-                  ))}
-                </select>
+          <div className="flex flex-wrap items-center gap-4 sm:gap-8 mb-3 text-[15px]">
+            <div className="flex items-center gap-3 flex-wrap w-full sm:w-auto">
+              <div className="min-w-0">Teacher: <span className="font-bold text-lg">{teacherName || 'Select a teacher'}</span></div>
+              <div className="no-print w-full sm:w-auto">
+                <div className="relative w-full sm:w-auto">
+                  <select
+                    value={teacherId||''}
+                    onChange={(e)=>setTeacherId(e.target.value? Number(e.target.value): null)}
+                    className="rounded-lg border-gray-300 pl-3 pr-9 py-2 text-base sm:text-sm shadow-sm bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 w-full sm:w-[260px]"
+                  >
+                    <option value="">Select teacher</option>
+                    {teachers.map(t=> (
+                      <option key={t.id} value={t.id}>{displayTeacherName(t) || `Teacher #${t.id}`}</option>
+                    ))}
+                  </select>
+                  <svg className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6"/></svg>
+                </div>
               </div>
             </div>
             <div>Term: <span className="font-semibold">{plan?.term_detail?.name || `T${plan?.term_detail?.number||''}`}</span></div>
@@ -181,13 +184,13 @@ export default function TeacherTimetableView(){
             <div className="text-gray-500">No timetable data.</div>
           ) : (
             <div className="a4-sheet bg-white rounded-lg border border-gray-200 shadow-sm mx-auto">
-              <div className="overflow-hidden">
-                <table className="w-full table-fixed text-[12px] border-collapse">
-                  <thead>
-                    <tr className="bg-blue-50/60">
-                      <th className="px-2 py-3 text-left text-gray-700 w-20 uppercase tracking-wide">Day</th>
+              <div className="overflow-auto max-h-[70vh]">
+                <table className="w-full text-[12px] border-collapse min-w-[640px]">
+                  <thead className="sticky top-0 bg-blue-50/60 z-10">
+                    <tr>
+                      <th className="px-2 py-4 text-left text-gray-700 w-24 sticky left-0 bg-blue-50/60 z-20 uppercase tracking-wide">Day</th>
                       {periods.map(p=> (
-                        <th key={`h-${p.period_index}`} className="px-2 py-3 text-center text-gray-800 font-semibold">
+                        <th key={`h-${p.period_index}`} className="px-2 py-4 text-center text-gray-800 font-semibold min-w-20 md:min-w-28">
                           {p.kind==='lesson'? `Lesson ${p.period_index}` : (p.label||p.kind.toUpperCase())}
                         </th>
                       ))}
@@ -196,18 +199,18 @@ export default function TeacherTimetableView(){
                   <tbody>
                     {activeDays.map(d=> (
                       <tr key={`d-${d}`} className="border-t">
-                        <td className="px-2 py-3 font-semibold text-gray-900 bg-gray-50 uppercase align-middle">{dayNames[d]}</td>
+                        <td className="px-2 py-4 font-semibold text-gray-900 bg-white sticky left-0 z-10 uppercase align-middle w-24 border-r">{dayNames[d]}</td>
                         {periods.map(p=>{
                           if(p.kind==='break' || p.kind==='lunch'){
                             const bg = p.kind==='break'? 'bg-amber-200 text-amber-900' : 'bg-yellow-200 text-yellow-900'
-                            return <td key={`c-${d}-${p.period_index}`} className={`px-2 py-3 text-center font-bold align-middle ${bg}`}>{(p.label||p.kind||'').toString().toUpperCase()}</td>
+                            return <td key={`c-${d}-${p.period_index}`} className={`px-2 py-4 text-center font-bold align-middle ${bg}`}>{(p.label||p.kind||'').toString().toUpperCase()}</td>
                           }
                           const entries = cellEntries(d, p.period_index)
                           if(entries.length===0){
-                            return <td key={`c-${d}-${p.period_index}`} className="px-2 py-3 text-center text-gray-400 align-middle">—</td>
+                            return <td key={`c-${d}-${p.period_index}`} className="px-2 py-4 text-center text-gray-400 align-middle">—</td>
                           }
                           return (
-                            <td key={`c-${d}-${p.period_index}`} className="px-2 py-3 text-center align-middle">
+                            <td key={`c-${d}-${p.period_index}`} className="px-2 py-4 text-center align-middle">
                               {entries.map((txt, idx)=> (
                                 <div key={idx} className="leading-tight text-gray-900">{txt}</div>
                               ))}

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import StatCard from '../components/StatCard'
 import AdminLayout from '../components/AdminLayout'
+import Modal from '../components/Modal'
 import { Line, Bar } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -25,12 +26,31 @@ export default function AdminDashboard(){
 
   useEffect(()=>{ (async()=>{
     try {
-      const [summaryRes, eventsRes] = await Promise.all([
+      const [summaryRes, eventsRes, examsRes] = await Promise.all([
         api.get('/reports/summary/'),
-        api.get('/communications/events/')
+        api.get('/communications/events/'),
+        api.get('/academics/exams/', { params: { include_history: true } }).catch(()=>({ data: [] })),
       ])
       setStats(summaryRes.data)
-      setEvents(eventsRes.data)
+      const baseEvents = Array.isArray(eventsRes.data) ? eventsRes.data : (eventsRes.data?.results || [])
+      const exams = Array.isArray(examsRes.data) ? examsRes.data : (examsRes.data?.results || [])
+      const examEvents = exams.map(x => {
+        const dateStr = x.date || x.exam_date || x.scheduled_date || new Date().toISOString().slice(0,10)
+        const startStr = `${dateStr}T00:00:00`
+        const endStr = `${dateStr}T23:59:59`
+        return {
+          id: `exam-${x.id}`,
+          title: `Exam: ${x.name}`,
+          description: (x.class_name || x.klass_name) ? `Exam for ${x.class_name || x.klass_name}` : '',
+          start: startStr,
+          end: endStr,
+          all_day: true,
+          audience: 'exams',
+          visibility: 'internal',
+          source: 'exam',
+        }
+      })
+      setEvents([...baseEvents, ...examEvents])
       setLoading(false)
     } catch (e) {
       setStats({ error: true })
@@ -91,7 +111,60 @@ export default function AdminDashboard(){
     const dt = new Date(d)
     return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`
   }
-  const eventsByDay = events.reduce((map, ev) => {
+  // Weekend and Kenya holiday helpers
+  const isWeekend = (d) => { const day = new Date(d).getDay(); return day === 0 || day === 6 }
+  // Compute Easter Sunday (Anonymous Gregorian algorithm)
+  const easterDate = (year) => {
+    const a = year % 19
+    const b = Math.floor(year / 100)
+    const c = year % 100
+    const d = Math.floor(b / 4)
+    const e = b % 4
+    const f = Math.floor((b + 8) / 25)
+    const g = Math.floor((b - f + 1) / 3)
+    const h = (19 * a + b - d - g + 15) % 30
+    const i = Math.floor(c / 4)
+    const k = c % 4
+    const l = (32 + 2 * e + 2 * i - h - k) % 7
+    const m = Math.floor((a + 11 * h + 22 * l) / 451)
+    const month = Math.floor((h + l - 7 * m + 114) / 31) // 3=March, 4=April
+    const day = ((h + l - 7 * m + 114) % 31) + 1
+    return new Date(year, month - 1, day)
+  }
+  const kenyaHolidaysMap = (() => {
+    const y = currentMonth.getFullYear()
+    const map = new Map()
+    const add = (m, d, name) => { const key = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`; map.set(key, name) }
+    // Fixed-date holidays
+    add(1,1, "New Year's Day")
+    add(5,1, 'Labour Day')
+    add(6,1, 'Madaraka Day')
+    add(10,10, 'Huduma Day')
+    add(10,20, 'Mashujaa Day')
+    add(12,12, 'Jamhuri Day')
+    add(12,25, 'Christmas Day')
+    add(12,26, 'Boxing Day')
+    // Easter related
+    const easter = easterDate(y)
+    const goodFriday = new Date(easter); goodFriday.setDate(easter.getDate()-2)
+    const easterMonday = new Date(easter); easterMonday.setDate(easter.getDate()+1)
+    map.set(localKey(goodFriday), 'Good Friday')
+    map.set(localKey(easterMonday), 'Easter Monday')
+    return map
+  })()
+  // Category selection (filters)
+  const [selectedTags, setSelectedTags] = useState(new Set(['students','teachers','parents','exams','holidays','other']))
+  const tagFromEvent = (ev) => {
+    const s = `${ev?.category || ''} ${ev?.audience || ''} ${ev?.visibility || ''} ${ev?.title || ''}`.toLowerCase()
+    if (/exam|assessment|test/.test(s)) return 'exams'
+    if (/holiday|break|vacation/.test(s)) return 'holidays'
+    if (/student/.test(s)) return 'students'
+    if (/teach/.test(s)) return 'teachers'
+    if (/parent|guard/.test(s)) return 'parents'
+    return 'other'
+  }
+  const filteredEvents = events.filter(ev => selectedTags.has(tagFromEvent(ev)))
+  const eventsByDay = filteredEvents.reduce((map, ev) => {
     const key = localKey(ev.start)
     if (!map[key]) map[key] = []
     map[key].push(ev)
@@ -117,12 +190,17 @@ export default function AdminDashboard(){
     }
   }
 
+  // Day popover modal state
+  const [dayModalOpen, setDayModalOpen] = useState(false)
+  const [dayModalKey, setDayModalKey] = useState('')
+  const [dayModalEvents, setDayModalEvents] = useState([])
+
   return (
     <AdminLayout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Dashboard</h1>
             <p className="text-gray-600 mt-1">Welcome back! Here's what's happening with your school.</p>
           </div>
         </div>
@@ -136,8 +214,8 @@ export default function AdminDashboard(){
             Failed to load dashboard data. Please try refreshing the page.
           </div>
         ) : (
-          <>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <React.Fragment>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
               <StatCard
                 title="Students"
                 value={stats.students}
@@ -184,10 +262,11 @@ export default function AdminDashboard(){
                 <h2 className="text-lg font-semibold tracking-tight">Quick Actions</h2>
                 <span className="text-xs/5 bg-white/15 border border-white/20 px-2 py-1 rounded-full hidden sm:inline">Fast shortcuts</span>
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              {/* On very small screens, allow horizontal scrolling for easier access */}
+              <div className="flex gap-3 overflow-x-auto sm:overflow-visible sm:grid sm:grid-cols-3 lg:grid-cols-6">
                 <button
                   onClick={() => handleQuickAction('addStudent')}
-                  className="group rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
+                  className="group min-w-[140px] sm:min-w-0 rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
                   aria-label="Add Student"
                 >
                   <div className="mx-auto mb-2 w-9 h-9 rounded-lg bg-white/20 flex items-center justify-center text-lg">➕</div>
@@ -195,7 +274,7 @@ export default function AdminDashboard(){
                 </button>
                 <button
                   onClick={() => handleQuickAction('addTeacher')}
-                  className="group rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
+                  className="group min-w-[140px] sm:min-w-0 rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
                   aria-label="Add Teacher"
                 >
                   <div className="mx-auto mb-2 w-9 h-9 rounded-lg bg-white/20 flex items-center justify-center text-lg">👨‍🏫</div>
@@ -203,7 +282,7 @@ export default function AdminDashboard(){
                 </button>
                 <button
                   onClick={() => handleQuickAction('createExam')}
-                  className="group rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
+                  className="group min-w-[140px] sm:min-w-0 rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
                   aria-label="Create Exam"
                 >
                   <div className="mx-auto mb-2 w-9 h-9 rounded-lg bg-white/20 flex items-center justify-center text-lg">📝</div>
@@ -211,7 +290,7 @@ export default function AdminDashboard(){
                 </button>
                 <button
                   onClick={() => handleQuickAction('viewReports')}
-                  className="group rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
+                  className="group min-w-[140px] sm:min-w-0 rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
                   aria-label="View Reports"
                 >
                   <div className="mx-auto mb-2 w-9 h-9 rounded-lg bg-white/20 flex items-center justify-center text-lg">📊</div>
@@ -219,7 +298,7 @@ export default function AdminDashboard(){
                 </button>
                 <button
                   onClick={() => handleQuickAction('schoolSettings')}
-                  className="group rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
+                  className="group min-w-[140px] sm:min-w-0 rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
                   aria-label="School Settings"
                 >
                   <div className="mx-auto mb-2 w-9 h-9 rounded-lg bg-white/20 flex items-center justify-center text-lg">🏫</div>
@@ -227,7 +306,7 @@ export default function AdminDashboard(){
                 </button>
                 <button
                   onClick={() => handleQuickAction('userManagement')}
-                  className="group rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
+                  className="group min-w-[140px] sm:min-w-0 rounded-xl border border-white/20 bg-white/10 hover:bg-white/20 backdrop-blur-md p-3 text-center transition-all duration-200 hover:-translate-y-0.5 shadow-soft"
                   aria-label="User Management"
                 >
                   <div className="mx-auto mb-2 w-9 h-9 rounded-lg bg-white/20 flex items-center justify-center text-lg">👥</div>
@@ -295,8 +374,8 @@ export default function AdminDashboard(){
 
                 {/* Monthly Bar Chart */}
                 {Array.isArray(stats.feesTrend) && stats.feesTrend.length>0 && (
-                  <div>
-                    <Bar height={120}
+                  <div className="h-72 sm:h-80 lg:h-[420px]">
+                    <Bar height={360}
                       data={{
                         labels: stats.feesTrend.map(i=>i.month),
                         datasets: [{
@@ -311,6 +390,7 @@ export default function AdminDashboard(){
                       }}
                       options={{
                         responsive:true,
+                        maintainAspectRatio:false,
                         plugins:{ legend:{ display:false } },
                         scales: {
                           x: { grid: { display: false }, ticks: { color: '#6b7280' } },
@@ -347,6 +427,37 @@ export default function AdminDashboard(){
 
                 {/* Modern Mini Calendar */}
                 <div className="space-y-3">
+                  {/* Legend and Filters */}
+                  <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                    {/* Legend chips */}
+                    <span className="px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">Students</span>
+                    <span className="px-2 py-0.5 rounded-full border bg-purple-50 text-purple-700 border-purple-200">Teachers</span>
+                    <span className="px-2 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200">Parents</span>
+                    <span className="px-2 py-0.5 rounded-full border bg-rose-50 text-rose-700 border-rose-200">Exams</span>
+                    <span className="px-2 py-0.5 rounded-full border bg-sky-50 text-sky-700 border-sky-200">Holidays</span>
+                    <span className="px-2 py-0.5 rounded-full border bg-blue-50 text-blue-700 border-blue-200">Other</span>
+                    {/* Filters */}
+                    <div className="ml-auto flex flex-wrap items-center gap-1">
+                      {[
+                        ['students','Students'],
+                        ['teachers','Teachers'],
+                        ['parents','Parents'],
+                        ['exams','Exams'],
+                        ['holidays','Holidays'],
+                        ['other','Other'],
+                      ].map(([key,label])=>{
+                        const active = selectedTags.has(key)
+                        return (
+                          <button
+                            key={key}
+                            onClick={()=> setSelectedTags(prev=>{ const n=new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n })}
+                            className={`px-2 py-0.5 rounded-full border text-[11px] ${active ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'}`}
+                          >{label}</button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-7 text-[11px] font-semibold text-gray-500 mb-2">
                     {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=> <div key={d} className="px-1 py-1 text-center tracking-wide">{d}</div>)}
                   </div>
@@ -357,13 +468,21 @@ export default function AdminDashboard(){
                       const isToday = key === localKey(new Date())
                       const dayEvents = eventsByDay[key] || []
                       const color = dayEvents.length>0 ? colorForEvent(dayEvents[0]) : null
-                      const baseBg = inMonth ? 'bg-white' : 'bg-gray-50'
-                      const activeBg = color ? color.chip.split(' ').find(c=>c.startsWith('bg-')) : baseBg
+                      const holidayName = kenyaHolidaysMap.get(key)
+                      const weekend = isWeekend(d)
+                      // Base background priority: Holiday (yellow) > Event color > Weekend (indigo) > default white/gray
+                      let tileBg = inMonth ? 'bg-white' : 'bg-gray-50'
+                      if (weekend && inMonth) tileBg = 'bg-indigo-50'
+                      if (color && dayEvents.length>0) tileBg = color.chip.split(' ').find(c=>c.startsWith('bg-')) || tileBg
+                      if (holidayName) tileBg = 'bg-yellow-50'
                       return (
-                        <div key={i} className={`relative rounded-xl min-h-[68px] p-2 text-xs border ${inMonth? 'border-gray-200':'border-gray-200/70'} ${dayEvents.length? activeBg : baseBg} hover:border-brand-300 hover:shadow-soft transition-all`}> 
+                        <button type="button" onClick={()=>{ setDayModalKey(key); setDayModalEvents(dayEvents); setDayModalOpen(true) }} key={i} className={`text-left relative rounded-xl min-h-[68px] p-2 text-xs border ${holidayName? 'border-yellow-300' : (inMonth? 'border-gray-200':'border-gray-200/70')} ${tileBg} hover:border-brand-300 hover:shadow-soft transition-all`}> 
                           <div className="flex items-center justify-between">
                             <div className={`${inMonth? 'text-gray-800':'text-gray-400'} text-[11px] font-semibold`}>{d.getDate()}</div>
-                            {isToday && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-700 border border-brand-200">Today</span>}
+                            <div className="flex items-center gap-1">
+                              {holidayName && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-800 border border-yellow-200" title={holidayName}>Holiday</span>}
+                              {isToday && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-700 border border-brand-200">Today</span>}
+                            </div>
                           </div>
                           <div className="mt-1 flex flex-wrap gap-1">
                             {dayEvents.slice(0,3).map(ev => {
@@ -381,7 +500,7 @@ export default function AdminDashboard(){
                               {dayEvents.length}
                             </div>
                           )}
-                        </div>
+                        </button>
                       )
                     })}
                   </div>
@@ -394,7 +513,7 @@ export default function AdminDashboard(){
                     {events
                       .filter(ev => new Date(ev.start) >= new Date())
                       .sort((a,b) => new Date(a.start) - new Date(b.start))
-                      .slice(0,5)
+                      .slice(0,1)
                       .map(ev => (
                         <div key={ev.id} className="flex items-center justify-between p-2 bg-gray-50 rounded text-sm">
                           <div className="flex-1 min-w-0">
@@ -413,9 +532,29 @@ export default function AdminDashboard(){
                 </div>
               </div>
             </div>
-          </>
+          </React.Fragment>
         )}
       </div>
+      {/* Day Popover Modal */}
+      <Modal open={dayModalOpen} onClose={()=>setDayModalOpen(false)} title={`Events — ${dayModalKey}`} size="md">
+        <div className="space-y-2">
+          {dayModalEvents.length === 0 ? (
+            <div className="text-sm text-gray-600">No events on this day.</div>
+          ) : (
+            dayModalEvents.map(ev => (
+              <div key={ev.id} className="border rounded-lg p-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-medium truncate">{ev.title}</div>
+                  <div className="text-xs text-gray-600 truncate">{ev.all_day ? 'All day' : `${new Date(ev.start).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} - ${new Date(ev.end).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}`} {ev.location && `• ${ev.location}`}</div>
+                </div>
+                <div className="shrink-0 flex items-center gap-2">
+                  <button onClick={()=>{ setDayModalOpen(false); navigate('/admin/events') }} className="px-2 py-1 text-sm rounded border bg-white hover:bg-gray-50">Open</button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </Modal>
     </AdminLayout>
   )
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState, useRef } from 'react'
 import AdminLayout from '../components/AdminLayout'
 import api from '../api'
 
@@ -54,6 +54,8 @@ export default function AdminTimetable() {
   const [pendingGenerate, setPendingGenerate] = useState(false)
   const [allSubjects, setAllSubjects] = useState([])
   const [loadingSubjects, setLoadingSubjects] = useState(false)
+  // Daily cap for teacher workload (max lessons per day)
+  const [maxTeacherLessonsPerDay, setMaxTeacherLessonsPerDay] = useState(5)
   // Save feedback
   const [saveError, setSaveError] = useState(null)
   const [lastSavedAt, setLastSavedAt] = useState(null)
@@ -81,6 +83,9 @@ export default function AdminTimetable() {
       classSubjectsMap.set(cls.id, { subjects: subs, idx: startIdx })
     }
 
+    
+
+
     const nextSubjectFor = (classId)=>{
       const rec = classSubjectsMap.get(classId)
       if(!rec || rec.subjects.length===0) return null
@@ -92,6 +97,9 @@ export default function AdminTimetable() {
     // teacher conflict tracker: day-period -> Set(teacherId)
     const busy = new Map()
     const keyDP = (d, p)=> `${d}-${p}`
+    // Track per-day teaching load per teacher
+    const teacherDailyCount = new Map() // key `${day}-${teacherId}` -> count
+    const keyTD = (d, tid)=> `${d}-${String(tid)}`
 
     // Priority detection helpers
     const isPrioritySubject = (s)=>{
@@ -130,6 +138,7 @@ export default function AdminTimetable() {
     const newAssign = {}
 
     // RULE: P.P.I must appear only once — Friday Lesson 1 — assigned to Class Teacher
+    const ppiByClass = new Map() // classId -> subjectId
     try{
       const friday = 5 // Mon=1..Fri=5
       const firstLessonIdx = lessonPeriods[0]?.period_index
@@ -144,11 +153,21 @@ export default function AdminTimetable() {
         for(const cls of classList){
           const ppi = (cls.subjects||[]).find(ppiMatch)
           if(!ppi) continue
+          ppiByClass.set(cls.id, ppi.id)
           const key = `${friday}-${cls.id}-${firstLessonIdx}`
           newAssign[key] = { subjectId: ppi.id }
           // For display, ensure teacher for PPI is the class teacher if available
           const tdet = cls.class_teacher_detail || cls.teacher_detail || null
           if(tdet){ mapAugment[`${cls.id}-${ppi.id}`] = tdet }
+          // Mark teacher as busy for this slot and count toward their daily max
+          const tid = tdet?.id || tdet?.user?.id
+          if(tid){
+            const kdp = keyDP(friday, firstLessonIdx)
+            if(!busy.has(kdp)) busy.set(kdp, new Set())
+            busy.get(kdp).add(String(tid))
+            const ktd = keyTD(friday, tid)
+            teacherDailyCount.set(ktd, (teacherDailyCount.get(ktd)||0) + 1)
+          }
         }
         // Merge mapAugment into classSubjectTeacherMap for UI
         if(Object.keys(mapAugment).length){
@@ -169,7 +188,14 @@ export default function AdminTimetable() {
           const keyPrev = `${day}-${classId}-${i}`
           const assignedPrev = (newAssign[keyPrev] || blockAssignments[keyPrev])
           if(assignedPrev){
-            return String(assignedPrev.subjectId) === String(subjectId)
+            // If same subject OR same category as previous (before a break), it violates adjacency
+            if(String(assignedPrev.subjectId) === String(subjectId)) return true
+            const currObj = subjectById.get(subjectId)
+            const prevObj = subjectById.get(assignedPrev.subjectId)
+            if(currObj && prevObj && currObj.category && prevObj.category){
+              return String(currObj.category) === String(prevObj.category)
+            }
+            return false
           }
           // if no assignment on that lesson, keep scanning further back
         }
@@ -190,10 +216,8 @@ export default function AdminTimetable() {
           // skip if cell already has an assignment
           const cellKey = `${d}-${cls.id}-${p.period_index}`
           if(newAssign[cellKey]) continue
-          // Try priority subject first if within morning, up to 2 per day
-          const prKey = `${d}-${cls.id}`
-          const currentPrCount = priorityPlaced.get(prKey) || 0
-          const wantsPriority = morningLessonSet.has(p.period_index) && currentPrCount < (Number(priorityMaxPerDay)||2)
+          // Try priority subject first if within morning (no per-day cap now)
+          const wantsPriority = morningLessonSet.has(p.period_index)
           if(wantsPriority){
             const mathSubj = (cls.subjects||[]).find(isPrioritySubject)
             if(mathSubj){
@@ -201,15 +225,19 @@ export default function AdminTimetable() {
               const t = classSubjectTeacherMap[`${cls.id}-${sId}`]
               const tid = t?.id || t?.user?.id
               const teacherFree = (!tid || !occupied.has(String(tid)))
+              const underDailyMax = (!tid) || ((teacherDailyCount.get(keyTD(d, tid))||0) < (Number(maxTeacherLessonsPerDay)||5))
               const okAdjacency = !violatesAdjacency(d, cls.id, p.period_index, sId)
               // If mathematics, enforce morning only
               const isMath = isMathSubject(mathSubj)
               if(isMath && !morningLessonSet.has(p.period_index)){
                 // skip this slot for math
-              } else if(teacherFree && okAdjacency){
+              } else if(teacherFree && underDailyMax && okAdjacency){
                 newAssign[cellKey] = { subjectId: sId }
                 if(tid) occupied.add(String(tid))
-                priorityPlaced.set(prKey, currentPrCount + 1)
+                if(tid){
+                  const ktd = keyTD(d, tid)
+                  teacherDailyCount.set(ktd, (teacherDailyCount.get(ktd)||0) + 1)
+                }
                 continue
               }
             }
@@ -225,24 +253,27 @@ export default function AdminTimetable() {
           const start = subs.length ? Math.floor(Math.random()*subs.length) : 0
           while(attempts < subs.length){
             const sId = subs[(start + attempts) % (subs.length || 1)] || nextSubjectFor(cls.id)
+            // Skip PPI in all cells except the enforced Friday Lesson 1
+            const ppiId = ppiByClass.get(cls.id)
+            if(ppiId && String(ppiId) === String(sId)) { attempts += 1; continue }
             const t = classSubjectTeacherMap[`${cls.id}-${sId}`]
             const tid = t?.id || t?.user?.id
             // Check teacher availability and adjacency rule
             const teacherFree = (!tid || !occupied.has(String(tid)))
+            const underDailyMax = (!tid) || ((teacherDailyCount.get(keyTD(d, tid))||0) < (Number(maxTeacherLessonsPerDay)||5))
             const okAdjacency = !violatesAdjacency(d, cls.id, p.period_index, sId)
-            // Enforce max twice per day for priority subjects in normal fill as well
             const subjObj = subjectById.get(sId)
             const isPr = isPrioritySubject(subjObj)
-            const prKeyCurr = `${d}-${cls.id}`
-            const prCount = priorityPlaced.get(prKeyCurr) || 0
-            if(isPr && prCount >= (Number(priorityMaxPerDay)||2)){ attempts += 1; continue }
             // If this is Mathematics, enforce morning-only placement
             const isMath = isMathSubject(subjObj)
             if(isMath && !morningLessonSet.has(p.period_index)){ attempts += 1; continue }
-            if(teacherFree && okAdjacency){
+            if(teacherFree && underDailyMax && okAdjacency){
               chosenSubj = sId
               if(tid) occupied.add(String(tid))
-              if(isPr) priorityPlaced.set(prKeyCurr, prCount + 1)
+              if(tid){
+                const ktd = keyTD(d, tid)
+                teacherDailyCount.set(ktd, (teacherDailyCount.get(ktd)||0) + 1)
+              }
               break
             }
             attempts += 1
@@ -272,33 +303,33 @@ export default function AdminTimetable() {
           return amA - amB || a.period_index - b.period_index
         })
         const candidateSubjects = mathSub ? [mathSub] : prSubs
-        // Respect max per day
-        const prKeyCurr = `${d}-${cls.id}`
-        const prCount = priorityPlaced.get(prKeyCurr) || 0
-        if(prCount >= (Number(priorityMaxPerDay)||2)) continue
         for(const subj of candidateSubjects){
           for(const lp of ordered){
             // If subject is Math, enforce morning-only
             if(isMathSubject(subj) && !morningLessonSet.has(lp.period_index)) continue
+            // Skip PPI unless Friday Lesson 1 (already assigned)
+            const ppiId = ppiByClass.get(cls.id)
+            if(ppiId && String(ppiId) === String(subj.id)) continue
             const cellKey = `${d}-${cls.id}-${lp.period_index}`
             if(newAssign[cellKey]) continue
             const t = classSubjectTeacherMap[`${cls.id}-${subj.id}`]
             const tid = t?.id || t?.user?.id
-            const kdp = keyDP(d, lp.period_index)
-            if(!busy.has(kdp)) busy.set(kdp, new Set())
-            const occupied = busy.get(kdp)
-            const teacherFree = (!tid || !occupied.has(String(tid)))
+            const teacherFree = (!tid || !busy.get(keyDP(d, lp.period_index))?.has(String(tid)))
+            const underDailyMax = (!tid) || ((teacherDailyCount.get(keyTD(d, tid))||0) < (Number(maxTeacherLessonsPerDay)||5))
             const okAdjacency = !violatesAdjacency(d, cls.id, lp.period_index, subj.id)
-            if(teacherFree && okAdjacency){
+            if(teacherFree && underDailyMax && okAdjacency){
               newAssign[cellKey] = { subjectId: subj.id }
-              if(tid) occupied.add(String(tid))
-              priorityPlaced.set(prKeyCurr, prCount + 1)
+              if(tid){
+                const k = keyDP(d, lp.period_index)
+                if(!busy.has(k)) busy.set(k, new Set())
+                busy.get(k).add(String(tid))
+                const ktd = keyTD(d, tid)
+                teacherDailyCount.set(ktd, (teacherDailyCount.get(ktd)||0) + 1)
+              }
               break
             }
           }
-          // if placed, break outer loop
-          const placedNow = lessonPeriods.some(lp=> newAssign[`${d}-${cls.id}-${lp.period_index}`]?.subjectId === subj.id)
-          if(placedNow) break
+          if(newAssign[`${d}-${cls.id}-${(ordered[0]||{}).period_index}`]) break
         }
       }
     }
@@ -645,6 +676,58 @@ export default function AdminTimetable() {
     const arr = (selectedTemplate?.days_active || [1,2,3,4,5]).filter(d=>d>=1&&d<=7)
     return arr.sort((a,b)=>a-b)
   },[selectedTemplate])
+
+  // Print current Block Timetable (selected day)
+  const handlePrintBlock = ()=>{
+    try{
+      const day = selectedBlockDay
+      const periodsSorted = periods.slice().sort((a,b)=>a.period_index-b.period_index)
+      const title = `Block Timetable${currentPlan?` - ${currentPlan.name||''}`:''} — ${dayNames[day]}`
+      const thead = `
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:8px;border:1px solid #ddd;min-width:180px;">Class</th>
+            ${periodsSorted.map(p=>`<th style=\"text-align:center;padding:8px;border:1px solid #ddd;min-width:90px;\">${p.kind==='lesson'? `Lesson ${p.period_index}` : (p.label||p.kind.toUpperCase())}</th>`).join('')}
+          </tr>
+        </thead>`
+      const tbodyRows = (classList||[]).map(cls=>{
+        const cells = periodsSorted.map(p=>{
+          if(p.kind==='break' || p.kind==='lunch'){
+            return `<td style=\"text-align:center;padding:8px;border:1px solid #ddd;color:#374151;background:#f9fafb;\">${p.label||p.kind.toUpperCase()}</td>`
+          }
+          const cellKey = `${day}-${cls.id}-${p.period_index}`
+          const assigned = blockAssignments[cellKey]
+          if(!assigned){ return `<td style=\"text-align:center;padding:8px;border:1px solid #ddd;color:#6b7280;\">—</td>` }
+          const subj = (cls.subjects||[]).find(s=>s.id===assigned.subjectId)
+          const subjText = subj? (subj.code || subj.name || '') : ''
+          const t = classSubjectTeacherMap[`${cls.id}-${assigned.subjectId}`]
+          const tn = t ? `${t.first_name||''} ${t.last_name||''}`.trim() || (t.username||'') : ''
+          const label = tn ? `${subjText} — ${tn}` : subjText
+          return `<td style=\"text-align:center;padding:8px;border:1px solid #ddd;\">${label}</td>`
+        }).join('')
+        return `<tr><td style=\"padding:8px;border:1px solid #ddd;font-weight:600;\">${cls.name||`Class ${cls.id}`}</td>${cells}</tr>`
+      }).join('')
+      const tbody = `<tbody>${tbodyRows || `<tr><td colspan=\"${periodsSorted.length+1}\" style=\"padding:12px;text-align:center;color:#6b7280;border:1px solid #ddd;\">No classes found.</td></tr>`}</tbody>`
+      const styles = `
+        <style>
+          @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+          body { font-family: ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; color:#111827; }
+          h1 { font-size: 18px; margin: 0 0 12px; }
+          .meta { font-size: 12px; color:#6b7280; margin-bottom: 12px; }
+          table { border-collapse: collapse; width: 100%; font-size: 12px; }
+          th { background: #f3f4f6; }
+        </style>`
+      const html = `<!doctype html><html><head><meta charset=\"utf-8\">${styles}<title>${title}</title></head><body>
+        <h1>${title}</h1>
+        <div class=\"meta\">Generated on ${new Date().toLocaleString()}</div>
+        <table>${thead}${tbody}</table>
+      </body></html>`
+      const w = window.open('', '_blank')
+      if(!w) return
+      w.document.open(); w.document.write(html); w.document.close()
+      setTimeout(()=>{ try{ w.focus(); w.print(); }catch{} }, 150)
+    }catch(e){}
+  }
 
   const addPeriodRow = ()=>{
     const nextIndex = (periods[periods.length-1]?.period_index || 0) + 1
@@ -1154,9 +1237,9 @@ export default function AdminTimetable() {
           {/* Block Timetable Template (Classes x Sessions) */}
           {showBlockView && periods.length>0 && (
             <div className="mt-8">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
                 <div className="text-sm font-semibold text-gray-800">Block Timetable Template (Classes × Sessions)</div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar -mx-1 px-1">
                   <button
                     onClick={()=>{ const url = `/admin/timetable/teacher${currentPlan?`?planId=${currentPlan.id}`:''}`; window.location.href = url }}
                     className="px-2.5 py-1 rounded text-xs border bg-white text-gray-700 border-gray-300 hover:bg-gray-50">
@@ -1177,20 +1260,25 @@ export default function AdminTimetable() {
                     className="px-2.5 py-1 rounded text-xs border bg-gray-700 text-white border-gray-800 hover:bg-gray-800">
                     Revert
                   </button>
+                  <button
+                    onClick={handlePrintBlock}
+                    className="px-2.5 py-1 rounded text-xs border bg-white text-gray-700 border-gray-300 hover:bg-gray-50">
+                    Print
+                  </button>
                   {(selectedTemplate?.days_active || [1,2,3,4,5]).sort((a,b)=>a-b).map(d=> (
-                    <button key={d} onClick={()=>setSelectedBlockDay(d)} className={`px-2.5 py-1 rounded text-xs border ${selectedBlockDay===d? 'bg-blue-600 text-white border-blue-600':'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}>
+                    <button key={d} onClick={()=>setSelectedBlockDay(d)} className={`shrink-0 px-2.5 py-1 rounded text-xs border ${selectedBlockDay===d? 'bg-blue-600 text-white border-blue-600':'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'}`}>
                       {dayNames[d]}
                     </button>
                   ))}
                 </div>
               </div>
-              <div className="overflow-x-auto">
+              <div className="overflow-auto">
                 <table className="min-w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
-                  <thead className="bg-gray-50">
+                  <thead className="sticky top-0 bg-gray-50 z-20">
                     <tr>
-                      <th className="px-3 py-2 text-left text-gray-600 w-48">Class</th>
+                      <th className="px-3 py-2 text-left text-gray-600 w-48 sticky left-0 bg-gray-50 z-30">Class</th>
                       {periods.sort((a,b)=>a.period_index-b.period_index).map((p, colIdx)=> (
-                        <th key={`bh-${p.id||p.period_index}`} className="px-3 py-2 text-center text-gray-700 min-w-28">
+                        <th key={`bh-${p.id||p.period_index}`} className="px-3 py-2 text-center text-gray-700 min-w-24 md:min-w-28">
                           <div className="font-medium">{p.kind==='lesson' ? `Lesson ${p.period_index}` : (p.label || p.kind.toUpperCase())}</div>
                           {editingTimes && (
                             <div className="flex items-center justify-center gap-1 pt-1">
@@ -1205,7 +1293,7 @@ export default function AdminTimetable() {
                   <tbody>
                     {classList.length>0 ? classList.map(cls => (
                       <tr key={cls.id} className="border-t">
-                        <td className="px-3 py-2 font-medium text-blue-700 bg-gray-50 whitespace-nowrap">
+                        <td className="px-3 py-2 font-medium text-blue-700 bg-white whitespace-nowrap sticky left-0 z-20 w-48 border-r">
                           <button
                             className="underline decoration-dotted hover:decoration-solid"
                             title="Open class timetable"
@@ -1242,7 +1330,7 @@ export default function AdminTimetable() {
                               ) : (
                                 <button
                                   onClick={()=> setEditingCell(cellKey)}
-                                  className={`min-w-24 w-24 md:w-32 px-2 py-1 rounded text-xs border ${assigned? 'border-blue-200 bg-blue-50 text-blue-700':'border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100'}`}
+                                  className={`min-w-20 w-20 md:min-w-24 md:w-32 px-2 py-1 rounded text-xs border ${assigned? 'border-blue-200 bg-blue-50 text-blue-700':'border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100'}`}
                                   title={assigned? 'Click to edit':'Assign subject'}
                                 >
                                   {assigned? (()=>{
