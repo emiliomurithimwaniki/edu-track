@@ -12,74 +12,63 @@ export default function StudentReportCard(){
   const [error, setError] = useState('')
   const [logoFailed, setLogoFailed] = useState(false)
   const [school, setSchool] = useState(null)
-  const [rank, setRank] = useState(null)
+  const [ranks, setRanks] = useState({}) // { [examId]: rankData }
   const [dlStatus, setDlStatus] = useState('idle') // idle | preparing | downloading | failed | done
   const [teacherName, setTeacherName] = useState('')
-  const [selectedExamId, setSelectedExamId] = useState(null)
+  const [selectedTermYear, setSelectedTermYear] = useState(null) // e.g., '2025-T2'
   const [prevRank, setPrevRank] = useState(null)
 
-  // Identify the most recent exam by name then by latest occurrence
-  const latestExamName = useMemo(()=>{
-    if (!examResults.length) return null
-    // Prefer the last item (assuming API returns chronological), else first
-    const names = examResults.map(r=>r.exam_detail?.name || r.exam).filter(Boolean)
-    return names.length ? names[names.length-1] : null
+  // Build unique Term-Year options for published exams only, e.g., '2025-T2'
+  const termYearOptions = useMemo(()=>{
+    const set = new Set()
+    for (const r of examResults){
+      const ed = r.exam_detail || {}
+      if (!ed?.published) continue
+      const key = `${ed.year || ''}-T${ed.term || ''}`
+      if (ed.year && ed.term) set.add(key)
+    }
+    return Array.from(set)
   }, [examResults])
 
-  // Identify the latest exam id matching latestExamName for rank lookup
-  const latestExamId = useMemo(()=>{
-    if (!examResults.length) return null
-    // try last item that matches name label
-    for (let i = examResults.length - 1; i >= 0; i--) {
-      const r = examResults[i]
-      const label = r.exam_detail?.name || r.exam
-      if (!latestExamName || label === latestExamName) {
-        return r.exam_detail?.id || r.exam || null
+  // Default selected term-year to the latest published exam's term-year
+  useEffect(()=>{
+    if (!selectedTermYear && examResults.length){
+      for (let i = examResults.length - 1; i >= 0; i--) {
+        const ed = examResults[i]?.exam_detail
+        if (ed?.published && ed?.year && ed?.term){
+          setSelectedTermYear(`${ed.year}-T${ed.term}`)
+          break
+        }
       }
     }
-    return null
-  }, [examResults, latestExamName])
+  }, [examResults, selectedTermYear])
 
-  // Build unique exam list for selector
-  const examOptions = useMemo(()=>{
-    const map = new Map()
-    for (const r of examResults){
-      const id = r.exam_detail?.id || r.exam
-      const name = r.exam_detail?.name || r.exam
-      if (id && name && !map.has(id)) map.set(id, name)
-    }
-    // Sort by name then id for consistency
-    return Array.from(map.entries()).map(([id, name])=>({id, name}))
-  }, [examResults])
+  const parsedTermYear = useMemo(()=>{
+    if (!selectedTermYear) return null
+    const [y, t] = String(selectedTermYear).split('-T')
+    const year = Number(y)
+    const term = Number(t)
+    if (!Number.isFinite(year) || !Number.isFinite(term)) return null
+    return { year, term }
+  }, [selectedTermYear])
 
-  // Ordered unique exam list preserving original appearance order
-  const examOrder = useMemo(()=>{
+  // All published exams in the selected term-year, preserve original order
+  const termExams = useMemo(()=>{
+    if (!parsedTermYear) return []
     const seen = new Set()
     const list = []
     for (const r of examResults){
-      const id = r.exam_detail?.id || r.exam
-      if (id && !seen.has(String(id))){ seen.add(String(id)); list.push(id) }
+      const ed = r.exam_detail || {}
+      const id = ed.id || r.exam
+      if (!id || seen.has(String(id))) continue
+      if (!ed?.published) continue
+      if (ed.year === parsedTermYear.year && ed.term === parsedTermYear.term){
+        seen.add(String(id))
+        list.push({ id, name: ed.name || String(r.exam || ''), total_marks: ed.total_marks, term: ed.term, year: ed.year, grade: ed.grade_level_tag })
+      }
     }
     return list
-  }, [examResults])
-
-  // Current exam selection (selected or latest fallback)
-  const currentExamId = selectedExamId || latestExamId
-  const currentExamName = useMemo(()=>{
-    if (selectedExamId){
-      const found = examOptions.find(e=>String(e.id)===String(selectedExamId))
-      return found?.name || latestExamName
-    }
-    return latestExamName
-  }, [selectedExamId, examOptions, latestExamName])
-
-  // Find previous exam id (the distinct exam that appears just before current in student's results)
-  const prevExamId = useMemo(()=>{
-    if (!currentExamId) return null
-    const idx = examOrder.findIndex(id => String(id) === String(currentExamId))
-    if (idx > 0) return examOrder[idx-1]
-    return null
-  }, [currentExamId, examOrder])
+  }, [examResults, parsedTermYear])
 
   useEffect(()=>{
     let mounted = true
@@ -124,61 +113,85 @@ export default function StudentReportCard(){
     return ()=>{ mounted = false }
   }, [])
 
-  // Fetch rank once we know student and latest exam id
+  // Fetch rank for each exam in selected term
   useEffect(()=>{
     let active = true
     ;(async ()=>{
-      if (!student?.id || !currentExamId) return
-      try{
-        const { data } = await api.get(`/academics/exams/${currentExamId}/rank`, { params: { student: student.id } })
-        if (active) setRank(data)
-      }catch(_){ /* ignore rank errors */ }
+      if (!student?.id || termExams.length === 0) return
+      const next = {}
+      for (const ex of termExams){
+        try{
+          const { data } = await api.get(`/academics/exams/${ex.id}/rank`, { params: { student: student.id } })
+          if (!active) return
+          next[ex.id] = data
+        }catch(_){ /* ignore */ }
+      }
+      if (active) setRanks(next)
     })()
     return ()=>{ active = false }
-  }, [student?.id, currentExamId])
+  }, [student?.id, termExams])
 
-  // Fetch last term (previous exam) rank
-  useEffect(()=>{
-    let active = true
-    ;(async ()=>{
-      if (!student?.id || !prevExamId) { if(active) setPrevRank(null); return }
-      try{
-        const { data } = await api.get(`/academics/exams/${prevExamId}/rank`, { params: { student: student.id } })
-        if (active) setPrevRank(data)
-      }catch(_){ if(active) setPrevRank(null) }
-    })()
-    return ()=>{ active = false }
-  }, [student?.id, prevExamId])
+  // Grade mapping helper (default scale, can be made configurable)
+  const toGrade = (score) => {
+    const s = Number(score || 0)
+    if (s >= 80) return 'A'
+    if (s >= 70) return 'B'
+    if (s >= 60) return 'C'
+    if (s >= 50) return 'D'
+    return 'E'
+  }
 
-  const rows = useMemo(()=>{
-    if (!currentExamId && !currentExamName) return []
-    return examResults
-      .filter(r => (String(r.exam_detail?.id || r.exam) === String(currentExamId))
-                || ((r.exam_detail?.name || r.exam) === currentExamName))
-      .map(r => ({
-        subject: r.subject_detail ? `${r.subject_detail.code ? r.subject_detail.code + ' — ' : ''}${r.subject_detail.name || ''}` : String(r.subject || ''),
-        marks: Number(r.marks || 0)
-      }))
-  }, [examResults, currentExamId, currentExamName])
+  // Subjects present in the selected term across exams
+  const subjects = useMemo(()=>{
+    if (termExams.length === 0) return []
+    const map = new Map()
+    for (const r of examResults){
+      const ed = r.exam_detail || {}
+      if (!ed?.published) continue
+      if (!parsedTermYear || ed.year !== parsedTermYear.year || ed.term !== parsedTermYear.term) continue
+      const sid = r.subject_detail?.id || r.subject
+      if (!sid) continue
+      if (!map.has(String(sid))){
+        const label = r.subject_detail ? `${r.subject_detail.code ? r.subject_detail.code + ' — ' : ''}${r.subject_detail.name || ''}` : String(r.subject || '')
+        map.set(String(sid), { id: sid, label })
+      }
+    }
+    return Array.from(map.values())
+  }, [examResults, termExams, parsedTermYear])
 
+  // Build marks per subject per exam for rendering
+  const marksByExamAndSubject = useMemo(()=>{
+    const out = {}
+    for (const r of examResults){
+      const ed = r.exam_detail || {}
+      if (!ed?.published) continue
+      if (!parsedTermYear || ed.year !== parsedTermYear.year || ed.term !== parsedTermYear.term) continue
+      const exId = ed.id || r.exam
+      const sid = r.subject_detail?.id || r.subject
+      if (!exId || !sid) continue
+      out[String(exId)] = out[String(exId)] || {}
+      out[String(exId)][String(sid)] = Number(r.marks || 0)
+    }
+    return out
+  }, [examResults, parsedTermYear])
+
+  // Overall totals across the term (sum over all exam-subject marks)
   const totals = useMemo(()=>{
-    const total = rows.reduce((s, r)=> s + (Number.isFinite(r.marks) ? r.marks : 0), 0)
-    const count = rows.length || 0
+    if (subjects.length === 0 || termExams.length === 0) return { total: 0, count: 0, average: 0 }
+    let total = 0
+    let count = 0
+    for (const ex of termExams){
+      const m = marksByExamAndSubject[String(ex.id)] || {}
+      for (const subj of subjects){
+        const v = m[String(subj.id)]
+        if (Number.isFinite(v)) { total += v; count += 1 }
+      }
+    }
     const average = count ? (total / count) : 0
     return { total, count, average }
-  }, [rows])
+  }, [subjects, termExams, marksByExamAndSubject])
 
-  // Previous exam mean for this student
-  const prevMean = useMemo(()=>{
-    if (!prevExamId) return null
-    const prevRows = examResults.filter(r => String(r.exam_detail?.id || r.exam) === String(prevExamId))
-      .map(r => Number(r.marks || 0))
-    if (!prevRows.length) return null
-    const total = prevRows.reduce((s, v)=> s + (Number.isFinite(v)? v : 0), 0)
-    return prevRows.length ? (total / prevRows.length) : null
-  }, [examResults, prevExamId])
-
-  // Build a history list of all exams the student has ever done, with grade labels
+  // Build exam history (unchanged, for context)
   const examHistory = useMemo(()=>{
     const map = new Map()
     for (const r of examResults){
@@ -192,13 +205,20 @@ export default function StudentReportCard(){
           year: ed.year || null,
           term: ed.term || null,
           grade: ed.grade_level_tag || null,
+          published: !!ed.published
         })
       }
     }
-    // Preserve original appearance order from examOrder
-    return examOrder.map(id => map.get(String(id))).filter(Boolean)
-  }, [examResults, examOrder])
-
+    // Preserve original appearance order
+    const seen = new Set()
+    const list = []
+    for (const r of examResults){
+      const id = r.exam_detail?.id || r.exam
+      if (id && !seen.has(String(id))){ seen.add(String(id)); const item = map.get(String(id)); if (item) list.push(item) }
+    }
+    return list
+  }, [examResults])
+ 
   return (
     <div className="p-6">
       {/* Print styles for a clean sheet */}
@@ -242,64 +262,51 @@ export default function StudentReportCard(){
           </div>
         </div>
         <div className="flex items-center justify-between no-print">
-          <h1 className="text-2xl font-semibold tracking-tight">Report Card {currentExamName? `— ${currentExamName}`:''}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Report Card {parsedTermYear? `— Term ${parsedTermYear.term}, ${parsedTermYear.year}`:''}</h1>
           <div className="flex items-center gap-2">
-            {examOptions.length>0 && (
+            {termYearOptions.length>0 && (
               <select
                 className="px-2 py-1.5 border rounded bg-white text-sm"
-                value={currentExamId || ''}
-                onChange={(e)=> setSelectedExamId(e.target.value || null)}
-                title="Select exam"
+                value={selectedTermYear || ''}
+                onChange={(e)=> setSelectedTermYear(e.target.value || null)}
+                title="Select term"
               >
-                {!selectedExamId && <option value="">Latest</option>}
-                {examOptions.map(opt=> (
-                  <option key={opt.id} value={opt.id}>{opt.name}</option>
+                {termYearOptions.map(key=> (
+                  <option key={key} value={key}>{key.replace('-', ' ')}</option>
                 ))}
               </select>
             )}
             <Link to="/student/academics" className="px-3 py-1.5 rounded border hover:bg-gray-50">Back</Link>
             <button
-              className={`px-3 py-1.5 rounded text-white ${dlStatus==='failed' ? 'bg-red-600 hover:bg-red-700' : 'bg-emerald-600 hover:bg-emerald-700'} disabled:opacity-60`}
-              onClick={async ()=>{
-                try{
-                  if (!student?.id || !currentExamId) return
-                  setDlStatus('preparing')
-                  const url = `/academics/exams/${currentExamId}/report-card-pdf?student=${student.id}&v=${Date.now()}`
-                  const res = await api.get(url, { responseType: 'blob' })
-                  setDlStatus('downloading')
-                  const blob = new Blob([res.data], { type: 'application/pdf' })
-                  const link = document.createElement('a')
-                  link.href = window.URL.createObjectURL(blob)
-                  link.download = `report_card_${student?.admission_no || student?.id}.pdf`
-                  document.body.appendChild(link)
-                  link.click()
-                  link.remove()
-                  setDlStatus('done')
-                  // auto reset state after a short delay
-                  setTimeout(()=> setDlStatus('idle'), 2000)
-                }catch(e){ console.error('PDF download failed', e); setDlStatus('failed') }
-              }}
-              disabled={dlStatus==='preparing' || dlStatus==='downloading'}
+              className={`px-3 py-1.5 rounded text-white bg-gray-400 cursor-not-allowed`}
+              title="PDF export supports single exam only. Use Print to save a term report as PDF."
+              disabled
             >
-              {dlStatus==='idle' && 'Download PDF'}
-              {dlStatus==='preparing' && 'Preparing download…'}
-              {dlStatus==='downloading' && 'Downloading…'}
-              {dlStatus==='done' && 'Downloaded'}
-              {dlStatus==='failed' && 'Failed — Retry'}
+              Download PDF
             </button>
             <button className="px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700" onClick={()=>{ try { window.print() } catch(_) {} }}>Print</button>
           </div>
         </div>
-        {rank && (
+        {termExams.length>0 && (
           <div className="no-print grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-            <div className="flex items-center gap-2 bg-indigo-50 text-indigo-700 px-3 py-2 rounded border border-indigo-100">
-              <span className="font-medium">Class Position</span>
-              <span className="ml-auto">{rank.class?.position || '-'} / {rank.class?.size || '-'}</span>
-            </div>
-            <div className="flex items-center gap-2 bg-sky-50 text-sky-700 px-3 py-2 rounded border border-sky-100">
-              <span className="font-medium">Grade Position</span>
-              <span className="ml-auto">{rank.grade?.position || '-'} / {rank.grade?.size || '-'}</span>
-            </div>
+            {termExams.map(ex => {
+              const rk = ranks[ex.id]
+              return (
+                <div key={ex.id} className="flex items-center gap-2 bg-indigo-50 text-indigo-700 px-3 py-2 rounded border border-indigo-100">
+                  <span className="font-medium truncate">{ex.name} — Class Pos</span>
+                  <span className="ml-auto">{rk?.class?.position || '-'} / {rk?.class?.size || '-'}</span>
+                </div>
+              )
+            })}
+            {termExams.map(ex => {
+              const rk = ranks[ex.id]
+              return (
+                <div key={`${ex.id}-g`} className="flex items-center gap-2 bg-sky-50 text-sky-700 px-3 py-2 rounded border border-sky-100">
+                  <span className="font-medium truncate">{ex.name} — Grade Pos</span>
+                  <span className="ml-auto">{rk?.grade?.position || '-'} / {rk?.grade?.size || '-'}</span>
+                </div>
+              )
+            })}
           </div>
         )}
 
@@ -328,11 +335,12 @@ export default function StudentReportCard(){
                 </div>
                 <div className="text-xs text-gray-500">{new Date().toLocaleDateString()} {new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>
               </div>
-              <div className="text-center text-sm font-medium mt-1">Report Card {latestExamName? `— ${latestExamName}`:''}</div>
+              <div className="text-center text-sm font-medium mt-1">Report Card {parsedTermYear? `— Term ${parsedTermYear.term}, ${parsedTermYear.year}`:''}</div>
             </div>
 
             <div className="print-body">
-            {/* Meta strip */}
+            {/* Meta strip */
+            }
             <div className="px-5 py-4 border-b bg-gray-50/60">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
                 <div>
@@ -348,10 +356,24 @@ export default function StudentReportCard(){
                   <div className="mt-0.5 font-medium">{student?.klass_detail?.name || student?.klass || '-'}</div>
                 </div>
               </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm mt-3">
+                <div>
+                  <div className="text-gray-500">Grade</div>
+                  <div className="mt-0.5 font-medium">{student?.klass_detail?.grade_level || student?.klass_detail?.name || '-'}</div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Term</div>
+                  <div className="mt-0.5 font-medium">{parsedTermYear ? `Term ${parsedTermYear.term}` : '-'}</div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Year</div>
+                  <div className="mt-0.5 font-medium">{parsedTermYear?.year || '-'}</div>
+                </div>
+              </div>
             </div>
 
             <div className="p-5">
-              {rows.length === 0 ? (
+              {subjects.length === 0 || termExams.length === 0 ? (
                 <div className="text-sm text-gray-600">No results available yet.</div>
               ) : (
                 <div className="space-y-4">
@@ -377,34 +399,66 @@ export default function StudentReportCard(){
                   </div>
 
                   <div className="text-sm text-gray-500">Subjects</div>
-                  <div className="overflow-hidden rounded border border-gray-100">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50 sticky top-0">
-                        <tr className="text-gray-600">
-                          <th className="text-left px-3 py-2 font-medium">Subject</th>
-                          <th className="text-right px-3 py-2 font-medium">Marks</th>
+                  <div className="overflow-auto rounded border border-gray-100">
+                    <table className="w-full text-sm min-w-[640px]">
+                      <thead>
+                        <tr className="bg-gray-50 text-gray-700">
+                          <th className="text-left px-3 py-2 font-medium align-bottom" rowSpan={2}>Subject</th>
+                          {termExams.map(ex => (
+                            <th key={ex.id} className="text-center px-3 py-2 font-medium" colSpan={2}>{ex.name}</th>
+                          ))}
+                        </tr>
+                        <tr className="bg-gray-50 text-gray-500">
+                          {termExams.map(ex => (
+                            <>
+                              <th key={`${ex.id}-m`} className="text-right px-3 py-1 font-medium">Marks</th>
+                              <th key={`${ex.id}-g`} className="text-center px-3 py-1 font-medium">Grade</th>
+                            </>
+                          ))}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
-                        {rows.map((r, i)=> (
-                          <tr key={i} className="hover:bg-gray-50/60">
-                            <td className="px-3 py-2">{r.subject}</td>
-                            <td className="px-3 py-2 text-right">{r.marks}</td>
+                        {subjects.map((subj)=> (
+                          <tr key={String(subj.id)} className="hover:bg-gray-50/60">
+                            <td className="px-3 py-2">{subj.label}</td>
+                            {termExams.map(ex => {
+                              const v = marksByExamAndSubject[String(ex.id)]?.[String(subj.id)]
+                              return (
+                                <>
+                                  <td key={`${ex.id}-${subj.id}-m`} className="px-3 py-2 text-right">{Number.isFinite(v) ? v : '-'}</td>
+                                  <td key={`${ex.id}-${subj.id}-g`} className="px-3 py-2 text-center">{Number.isFinite(v) ? toGrade(v) : '-'}</td>
+                                </>
+                              )
+                            })}
                           </tr>
                         ))}
                       </tbody>
                       <tfoot className="bg-gray-50">
                         <tr className="border-t">
                           <td className="px-3 py-2 font-medium">Total</td>
-                          <td className="px-3 py-2 text-right font-medium">{totals.total.toFixed(2)}</td>
-                        </tr>
-                        <tr>
-                          <td className="px-3 py-2 font-medium">Average</td>
-                          <td className="px-3 py-2 text-right font-medium">{totals.average.toFixed(2)}</td>
+                          {termExams.map(ex => {
+                            let sum = 0
+                            let cnt = 0
+                            const m = marksByExamAndSubject[String(ex.id)] || {}
+                            for (const subj of subjects){
+                              const v = m[String(subj.id)]
+                              if (Number.isFinite(v)) { sum += v; cnt += 1 }
+                            }
+                            const avg = cnt ? (sum / cnt) : 0
+                            return (
+                              <>
+                                <td key={`${ex.id}-t`} className="px-3 py-2 text-right font-medium">{sum.toFixed(2)}</td>
+                                <td key={`${ex.id}-a`} className="px-3 py-2 text-center font-medium">{avg.toFixed(2)}</td>
+                              </>
+                            )
+                          })}
                         </tr>
                       </tfoot>
                     </table>
                   </div>
+
+                  {/* Grading scale */}
+                  <div className="text-xs text-gray-600">{'Grading Scale: A ≥ 80, B 70–79, C 60–69, D 50–59, E < 50'}</div>
                 </div>
               )}
             </div>
@@ -431,11 +485,7 @@ export default function StudentReportCard(){
               <ul className="divide-y divide-gray-100">
                 {examHistory.map(ex => (
                   <li key={ex.id} className="py-2 flex items-center gap-3">
-                    <button
-                      className={`px-2 py-1 rounded text-xs border ${String(currentExamId)===String(ex.id) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white hover:bg-gray-50'}`}
-                      onClick={()=> setSelectedExamId(ex.id)}
-                      title="View this exam"
-                    >View</button>
+                    <div className={`text-[10px] px-2 py-0.5 rounded-full border ${ex.published ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>{ex.published ? 'Published' : 'Draft'}</div>
                     <div className="flex-1 min-w-0">
                       <div className="font-medium truncate">{ex.name || `Exam ${ex.id}`}</div>
                       <div className="text-xs text-gray-500">Year {ex.year || '-'} • Term {ex.term || '-'}{ex.grade ? ` • ${ex.grade}` : ''}</div>

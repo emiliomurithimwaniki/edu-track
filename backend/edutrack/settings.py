@@ -259,3 +259,6 @@ AT_TRUST_ENV = os.getenv('AT_TRUST_ENV', 'False') == 'True'
 
 # Control whether creating chat messages queues email/SMS delivery
 MESSAGES_QUEUE_DELIVERY = os.getenv('MESSAGES_QUEUE_DELIVERY', 'True') == 'True'
+
+# Temporarily disable messaging on account creation/enrollment
+DISABLE_ACCOUNT_MESSAGING = True

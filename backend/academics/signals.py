@@ -1,6 +1,7 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.apps import apps
+from django.conf import settings
 
 @receiver(post_save, sender='accounts.School')
 def create_default_subjects_for_school(sender, instance, created, **kwargs):
@@ -37,6 +38,9 @@ def create_default_subjects_for_school(sender, instance, created, **kwargs):
 def notify_student_enrollment(sender, instance, created, **kwargs):
     """Send notifications after a student is created (enrolled)."""
     if not created:
+        return
+    # Short-circuit all outbound messaging during bulk seeding or when disabled
+    if getattr(settings, 'DISABLE_ACCOUNT_MESSAGING', False):
         return
     try:
         from communications.utils import notify_enrollment
