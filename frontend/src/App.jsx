@@ -62,6 +62,7 @@ import TeacherEvents from './pages/TeacherEvents'
 import { AssistantProvider } from './components/Assistant/AssistantContext'
 import FloatingButton from './components/Assistant/FloatingButton'
 import AssistantPanel from './components/Assistant/AssistantPanel'
+import FloatingActions from './components/FloatingActions'
 
 function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuth()
@@ -151,6 +152,7 @@ export default function App() {
             <Route path="/finance/fees" element={<ProtectedRoute roles={["finance","admin"]}><FinanceFees/></ProtectedRoute>} />
           </Routes>
           <NotificationContainer />
+          <FloatingActions />
           <FloatingButton />
           <AssistantPanel />
         </AuthProvider>

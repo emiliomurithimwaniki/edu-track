@@ -24,8 +24,9 @@ export default function TeacherClasses(){
           api.get('/auth/me/').catch(()=>({ data:null })),
         ])
         if (!mounted) return
-        setClasses(cls.data || [])
-        if (cls.data && cls.data.length>0) setSelected(String(cls.data[0].id))
+        const clsArr = Array.isArray(cls.data) ? cls.data : (cls.data?.results || [])
+        setClasses(clsArr)
+        if (clsArr && clsArr.length>0) setSelected(String(clsArr[0].id))
         if (meRes?.data) setMe(meRes.data)
       }catch(e){ setError(e?.response?.data?.detail || e?.message) }
       finally{ if(mounted) setLoading(false) }
@@ -41,7 +42,8 @@ export default function TeacherClasses(){
         setLoadingStudents(true)
         const res = await api.get(`/academics/students/?klass=${selected}`)
         if (!mounted) return
-        setStudents(res.data || [])
+        const stuArr = Array.isArray(res.data) ? res.data : (res.data?.results || [])
+        setStudents(stuArr)
       }catch(e){ setError(e?.response?.data?.detail || e?.message) }
       finally{ if (mounted) setLoadingStudents(false) }
     })()

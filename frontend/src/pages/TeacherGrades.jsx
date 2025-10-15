@@ -245,9 +245,10 @@ export default function TeacherGrades(){
       try{
         const res = await api.get(`/academics/students/?klass=${selectedClass}`)
         if (!mounted) return
-        setStudents(res.data || [])
+        const arr = Array.isArray(res.data) ? res.data : (Array.isArray(res?.data?.results) ? res.data.results : [])
+        setStudents(arr)
         const init = {}
-        ;(res.data||[]).forEach(s => init[s.id] = '')
+        arr.forEach(s => { init[s.id] = '' })
         setMarks(init)
         // set subjects to only those the logged-in teacher teaches in this class
         const current = classes.find(c => String(c.id)===String(selectedClass))
@@ -643,7 +644,8 @@ export default function TeacherGrades(){
   }
 
   const canSubmit = useMemo(()=> {
-    const anyValue = students.some(s => !isNaN(parseFloat(marks[s.id])))
+    const list = Array.isArray(students) ? students : []
+    const anyValue = list.some(s => !isNaN(parseFloat(marks[s.id])))
     const hasInvalid = Object.values(invalid).some(Boolean)
     return selectedClass && selectedSubject && selectedExamId && anyValue && !hasInvalid
   }, [selectedClass, selectedSubject, selectedExamId, students, marks, invalid])

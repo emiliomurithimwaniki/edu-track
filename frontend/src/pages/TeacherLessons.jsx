@@ -30,13 +30,16 @@ export default function TeacherLessons(){
           api.get('/academics/terms/of-current-year/').catch(()=>({ data: [] })),
         ])
         if (!mounted) return
-        setClasses(cls.data || [])
-        setPlans(lp.data || [])
-        setTerms(Array.isArray(tr.data?.results) ? tr.data.results : (Array.isArray(tr.data)? tr.data : []))
-        if (cls.data && cls.data.length>0) {
-          setSelected(String(cls.data[0].id))
-          const firstSubj = (cls.data[0].subjects||[])[0]
-          setForm(f => ({...f, klass: cls.data[0].id, subject: firstSubj? String(firstSubj.id): '', term: '', week: ''}))
+        const clsArr = Array.isArray(cls.data) ? cls.data : (cls.data?.results || [])
+        const plansArr = Array.isArray(lp.data) ? lp.data : (lp.data?.results || [])
+        const termsArr = Array.isArray(tr.data?.results) ? tr.data.results : (Array.isArray(tr.data)? tr.data : [])
+        setClasses(clsArr)
+        setPlans(plansArr)
+        setTerms(termsArr)
+        if (clsArr && clsArr.length>0) {
+          setSelected(String(clsArr[0].id))
+          const firstSubj = (clsArr[0].subjects||[])[0]
+          setForm(f => ({...f, klass: clsArr[0].id, subject: firstSubj? String(firstSubj.id): '', term: '', week: ''}))
         }
       }catch(e){ setError(e?.response?.data?.detail || e?.message) }
       finally{ if(mounted) setLoading(false) }

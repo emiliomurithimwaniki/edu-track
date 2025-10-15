@@ -1,35 +1,51 @@
 import React from 'react'
 import { useLocation } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import { useAssistant } from './AssistantContext'
 
 export default function FloatingButton(){
   const { togglePanel } = useAssistant()
   const { pathname } = useLocation()
-  const isMessages = typeof pathname === 'string' && pathname.includes('/messages')
-  // Lift button on messages page to avoid covering the chat composer
-  const bottomOffset = isMessages ? 88 : 20
-  const rightOffset = 20
-  return (
+  const isSmall = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 480px)').matches
+  const size = isSmall ? 40 : 44
+  const iconSize = isSmall ? 16 : 18
+  const root = typeof document !== 'undefined' ? document.getElementById('floating-actions-root') : null
+
+  const button = (
     <button
       onClick={togglePanel}
       aria-label="Open assistant"
       style={{
-        position: 'fixed',
-        right: `${rightOffset}px`,
-        bottom: `${bottomOffset}px`,
-        width: '56px',
-        height: '56px',
-        borderRadius: '50%',
+        order: 2,
+        width: `${size}px`,
+        height: `${size}px`,
+        borderRadius: '9999px',
         border: 'none',
         background: '#2563eb',
         color: 'white',
-        boxShadow: '0 10px 15px rgba(0,0,0,0.2)',
+        boxShadow: '0 6px 12px rgba(0,0,0,0.18)',
         cursor: 'pointer',
-        zIndex: 1000,
-        fontSize: '22px',
+        fontSize: `${iconSize}px`,
+        lineHeight: 1,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 0,
+        transform: 'translateZ(0)',
+        pointerEvents: 'auto',
       }}
+      title={pathname?.includes('/messages') ? 'Assistant (messages)' : 'Assistant'}
     >
       ✨
     </button>
+  )
+
+  if (root) return createPortal(button, root)
+
+  // Fallback to fixed if root missing
+  return (
+    <div style={{position:'fixed', right:16, bottom:24, zIndex:2100}}>
+      {button}
+    </div>
   )
 }

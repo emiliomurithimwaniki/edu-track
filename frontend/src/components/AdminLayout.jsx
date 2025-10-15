@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth'
 import api from '../api'
@@ -203,19 +204,44 @@ export default function AdminLayout({ children }){
       </header>
 
       {/* Floating mobile logout button (hidden on Messages page to avoid overlay) */}
-      {!(pathname.startsWith('/admin/messages')) && (
-        <button
-          onClick={logout}
-          className="sm:hidden fixed z-50 bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 h-12 w-12 rounded-full bg-red-600 text-white shadow-xl shadow-red-900/20 flex items-center justify-center active:scale-95 transition"
-          aria-label="Logout"
-          title="Logout"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-6 h-6">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v6" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5a7.5 7.5 0 1 0 10.5 0" />
-          </svg>
-        </button>
-      )}
+      {!(pathname.startsWith('/admin/messages')) && (() => {
+        const root = typeof document !== 'undefined' ? document.getElementById('floating-actions-root') : null
+        const isSmall = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(max-width: 767px)').matches
+        if (!isSmall) return null
+        const size = 44
+        const iconSize = 18
+        const btn = (
+          <button
+            onClick={logout}
+            aria-label="Logout"
+            title="Logout"
+            style={{
+              order: 1,
+              width: `${size}px`,
+              height: `${size}px`,
+              borderRadius: '9999px',
+              border: 'none',
+              background: '#dc2626',
+              color: 'white',
+              boxShadow: '0 6px 14px rgba(220,38,38,0.35)',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              pointerEvents: 'auto',
+            }}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" width={iconSize} height={iconSize}>
+              <path fillRule="evenodd" d="M12 2.25a.75.75 0 01.75.75v7.5a.75.75 0 01-1.5 0V3a.75.75 0 01.75-.75zm-4.657 2.843a.75.75 0 011.06 1.06 7.5 7.5 0 101.06-1.06 9 9 0 11-12.727 0z" clipRule="evenodd" />
+            </svg>
+          </button>
+        )
+        if (root) return createPortal(btn, root)
+        return (
+          <div style={{ position:'fixed', right:16, bottom:24, zIndex:2100}}>{btn}</div>
+        )
+      })()}
 
       {/* Sidebar + Content */}
       <div className="relative">

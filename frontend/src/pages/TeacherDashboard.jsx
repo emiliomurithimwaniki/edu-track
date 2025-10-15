@@ -62,7 +62,7 @@ export default function TeacherDashboard(){
         deduped.sort((a,b)=> String(a.name||'').localeCompare(String(b.name||'')))
         setClasses(deduped)
         if (sch?.data) setSchool(sch.data)
-        if (ev?.data) setEvents(ev.data)
+        if (ev?.data) setEvents(Array.isArray(ev.data) ? ev.data : (ev.data?.results || []))
         if (meRes?.data) setMe(meRes.data)
 
         // Load minimal timetable data to derive next class

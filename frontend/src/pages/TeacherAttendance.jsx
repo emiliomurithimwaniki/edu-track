@@ -53,10 +53,11 @@ export default function TeacherAttendance(){
       try{
         const res = await api.get(`/academics/students/?klass=${selected}`)
         if (!mounted) return
-        setStudents(res.data || [])
+        const arr = Array.isArray(res.data) ? res.data : (Array.isArray(res?.data?.results) ? res.data.results : [])
+        setStudents(arr)
         // default everyone to present
         const def = {}
-        ;(res.data||[]).forEach(s=> def[s.id] = 'present')
+        arr.forEach(s=> { def[s.id] = 'present' })
         setMarks(def)
       }catch(e){ setError(e?.response?.data?.detail || e?.message) }
     })()
@@ -89,7 +90,10 @@ export default function TeacherAttendance(){
     }finally{ setSubmitting(false) }
   }
 
-  const presentCount = useMemo(()=>students.filter(s => (marks[s.id]||'present')==='present').length, [students, marks])
+  const presentCount = useMemo(()=>{
+    const list = Array.isArray(students) ? students : []
+    return list.filter(s => (marks[s.id]||'present')==='present').length
+  }, [students, marks])
   const currentClass = useMemo(()=> classes.find(c=> String(c.id)===String(selected)) || null, [classes, selected])
   const isClassTeacher = useMemo(()=> {
     const meId = String(me?.id || '')
