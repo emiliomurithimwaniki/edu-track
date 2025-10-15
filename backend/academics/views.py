@@ -10,6 +10,7 @@ from django.http import HttpResponse
 from django.conf import settings
 import threading
 from io import BytesIO, StringIO
+from datetime import date
 from django.utils import timezone
 try:
     from reportlab.lib.pagesizes import A4
@@ -151,7 +152,16 @@ class ClassViewSet(viewsets.ModelViewSet):
         except Exception:
             # Fallback: if anything goes wrong, do not exclude
             pass
+        # Optimize list: only basic fields needed by filters
+        if getattr(self, 'action', None) == 'list':
+            qs = qs.only('id','name','grade_level')
         return qs
+
+    def get_serializer_class(self):
+        from .serializers import ClassLiteSerializer, ClassSerializer as ClassDetailSerializer
+        if getattr(self, 'action', None) == 'list':
+            return ClassLiteSerializer
+        return ClassDetailSerializer
 
     @action(detail=False, methods=['get'], permission_classes=[IsTeacherOrAdmin], url_path='mine')
     def mine(self, request):
@@ -310,6 +320,114 @@ class ExamViewSet(viewsets.ModelViewSet):
                 }
             })
         return Response({'name': name, 'items': data})
+
+    @action(detail=False, methods=['post'], permission_classes=[IsAdmin], url_path='common-bulk-create')
+    def common_bulk_create(self, request):
+        """Admin-only: Create common exams across classes.
+        Body:
+        {
+          "names": ["CAT 1","CAT 2","CAT 3","CAT 4","CAT 5"],  # required, 1..N
+          "term": 1,                                                    # required (1..3)
+          "year": 2025,                                                 # required
+          "total_marks": 100,                                           # optional, default 100
+          "date": "2025-02-10",                                       # optional default date for all
+          "dates": ["2025-02-10","2025-03-01", ...],                # optional per-name dates; same length as names
+          "grade": "Grade 4",                                         # optional filter; otherwise all classes
+          "publish": false                                              # optional, default false
+        }
+        Creates at most one exam per (class, name, year, term). If an exam already exists, it is skipped.
+        """
+        try:
+            names = request.data.get('names')
+            term = request.data.get('term')
+            year = request.data.get('year')
+            total_marks = request.data.get('total_marks', 100)
+            date_all = request.data.get('date')
+            dates = request.data.get('dates')
+            grade = request.data.get('grade')
+            publish = bool(request.data.get('publish', False))
+
+            if not isinstance(names, list) or len(names) == 0:
+                return Response({'detail': 'names must be a non-empty array'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                term = int(term)
+                year = int(year)
+            except Exception:
+                return Response({'detail': 'term and year are required integers'}, status=status.HTTP_400_BAD_REQUEST)
+            if term not in (1, 2, 3):
+                return Response({'detail': 'term must be 1, 2 or 3'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                total_marks = int(total_marks)
+            except Exception:
+                return Response({'detail': 'total_marks must be an integer'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Resolve school scope
+            school = getattr(getattr(request, 'user', None), 'school', None)
+            if not school:
+                return Response({'detail': 'Your user is not linked to a school'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Build class queryset in scope
+            cls_qs = Class.objects.filter(school=school)
+            if grade:
+                try:
+                    from .models import Class as ClassModel
+                    formatted = ClassModel.format_grade_level(grade)
+                    cls_qs = cls_qs.filter(grade_level=formatted)
+                except Exception:
+                    cls_qs = cls_qs.filter(grade_level=grade)
+
+            # Validate dates array if provided
+            use_dates = None
+            if isinstance(dates, list) and len(dates) == len(names):
+                use_dates = dates
+            else:
+                if dates is not None:
+                    return Response({'detail': 'dates length must match names length'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Default date fallback: today
+            default_date = None
+            if date_all:
+                default_date = str(date_all)
+            else:
+                try:
+                    default_date = date.today().isoformat()
+                except Exception:
+                    default_date = None
+
+            created = []
+            skipped = []
+            errors = []
+            with transaction.atomic():
+                for klass in cls_qs.select_related('stream'):
+                    for idx, nm in enumerate(names):
+                        nm_str = str(nm).strip()
+                        if not nm_str:
+                            continue
+                        # Determine date to use
+                        dval = None
+                        if use_dates:
+                            dval = use_dates[idx]
+                        else:
+                            dval = default_date
+                        # Check if exam exists
+                        exists = Exam.objects.filter(name__iexact=nm_str, year=year, term=term, klass=klass).first()
+                        if exists:
+                            skipped.append({'klass': getattr(klass, 'name', klass.id), 'name': exists.name, 'id': exists.id})
+                            continue
+                        try:
+                            e = Exam(name=nm_str, year=year, term=term, klass=klass, date=dval, total_marks=total_marks)
+                            e.save()
+                            if publish:
+                                e.published = True
+                                e.published_at = timezone.now()
+                                e.save(update_fields=['published', 'published_at', 'name'])
+                            created.append({'id': e.id, 'klass': getattr(klass, 'name', klass.id), 'name': e.name, 'date': e.date})
+                        except Exception as ex:
+                            errors.append({'klass': getattr(klass, 'name', klass.id), 'name': nm_str, 'error': str(ex)})
+
+            return Response({'created': created, 'skipped': skipped, 'errors': errors}, status=(status.HTTP_201_CREATED if created and not errors else status.HTTP_207_MULTI_STATUS))
+        except Exception as e:
+            return Response({'detail': 'bulk create failed', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=False, methods=['post'], permission_classes=[IsAdmin], url_path='bulk-assign')
     def bulk_assign(self, request):
@@ -1038,7 +1156,7 @@ class ExamViewSet(viewsets.ModelViewSet):
                         + f"Total: {round(total,2)}, Avg: {avg}. Login: {dashboard_url}"
                     )
                     try:
-                        phone = getattr(s, 'phone', None) or getattr(getattr(s, 'user', None), 'phone', None) or getattr(s, 'guardian_id', None)
+                        phone = getattr(s, 'guardian_id', None)
                         if phone:
                             send_sms(phone, sms)
                     except Exception:
@@ -2255,7 +2373,29 @@ class StudentViewSet(viewsets.ModelViewSet):
         q = self.request.query_params.get('q')
         if q:
             qs = qs.filter(Q(name__icontains=q) | Q(admission_no__icontains=q))
+
+        # Optimize field loading depending on action
+        act = getattr(self, 'action', None)
+        if act == 'list':
+            # Only fields needed by StudentListSerializer
+            qs = (
+                qs.select_related('klass')
+                  .only(
+                      'id','admission_no','name','dob','gender','upi_number','guardian_id','klass','is_graduated','graduation_year','photo',
+                      'klass__id','klass__name','klass__grade_level'
+                  )
+            )
+        else:
+            # For detailed views/updates, include related klass
+            qs = qs.select_related('klass')
         return qs
+
+    def get_serializer_class(self):
+        # Use lightweight serializer for list to reduce payload size
+        from .serializers import StudentListSerializer, StudentSerializer as StudentDetailSerializer
+        if getattr(self, 'action', None) == 'list':
+            return StudentListSerializer
+        return StudentDetailSerializer
 
     def perform_create(self, serializer):
         """Ensure school scoping on create: derive school from klass or request.user.school."""

@@ -154,6 +154,12 @@ def send_sms(phone: str, message: str) -> bool:
                     return True
                 # Fallback to SDK once
                 try:
+                    # Avoid system proxies for SDK if AT_TRUST_ENV is False (prevents TLS interception issues)
+                    _old_env = {}
+                    if not getattr(settings, 'AT_TRUST_ENV', False):
+                        for k in ('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy','NO_PROXY','no_proxy'):
+                            if k in os.environ:
+                                _old_env[k] = os.environ.pop(k)
                     import africastalking  # type: ignore
                     africastalking.initialize(at_username, at_api_key)
                     sms = africastalking.SMS
@@ -164,10 +170,22 @@ def send_sms(phone: str, message: str) -> bool:
                         return True
                 except Exception:
                     logger.exception("AT SDK fallback failed on sandbox")
+                finally:
+                    # Restore proxies
+                    try:
+                        for k, v in (_old_env.items() if '_old_env' in locals() else []):
+                            os.environ[k] = v
+                    except Exception:
+                        pass
                 return False
             else:
                 # Prefer SDK first
                 try:
+                    _old_env = {}
+                    if not getattr(settings, 'AT_TRUST_ENV', False):
+                        for k in ('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy','NO_PROXY','no_proxy'):
+                            if k in os.environ:
+                                _old_env[k] = os.environ.pop(k)
                     import africastalking  # type: ignore
                     africastalking.initialize(at_username, at_api_key)
                     sms = africastalking.SMS
@@ -179,6 +197,12 @@ def send_sms(phone: str, message: str) -> bool:
                 except Exception as e:
                     # Known WhatsApp sandbox error or TLS anomalies -> fallback to REST
                     logger.warning("AT SDK on sandbox error; falling back to REST: %s", e)
+                finally:
+                    try:
+                        for k, v in (_old_env.items() if '_old_env' in locals() else []):
+                            os.environ[k] = v
+                    except Exception:
+                        pass
                 return _send_sms_via_at_rest(at_username, at_api_key, phone, message, at_sender)
 
         # Live mode: use official SDK
@@ -186,6 +210,12 @@ def send_sms(phone: str, message: str) -> bool:
         ca_bundle = getattr(settings, 'AT_CA_BUNDLE', '') or ''
         if ca_bundle and not os.environ.get('REQUESTS_CA_BUNDLE'):
             os.environ['REQUESTS_CA_BUNDLE'] = ca_bundle
+        # Live: ensure proxies are cleared if AT_TRUST_ENV=False
+        _old_env = {}
+        if not getattr(settings, 'AT_TRUST_ENV', False):
+            for k in ('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy','NO_PROXY','no_proxy'):
+                if k in os.environ:
+                    _old_env[k] = os.environ.pop(k)
         import africastalking  # type: ignore
         africastalking.initialize(at_username, at_api_key)
         sms = africastalking.SMS
@@ -205,6 +235,13 @@ def send_sms(phone: str, message: str) -> bool:
             logger.info("SMS_LOOPBACK enabled: simulating success for %s after failure", phone)
             return True
         return False
+    finally:
+        # Restore proxies for live path if we cleared them
+        try:
+            for k, v in (_old_env.items() if '_old_env' in locals() else []):
+                os.environ[k] = v
+        except Exception:
+            pass
 
 
 def send_email_safe(subject: str, message: str, recipient: str) -> bool:
@@ -381,13 +418,9 @@ def process_arrears_campaign(campaign_id: int):
             if campaign.send_in_app and getattr(stu, 'user_id', None) and personalized_pairs is not None:
                 personalized_pairs.append((stu.user_id, msg))
 
-            # SMS: prefer guardian phone, then student phone, then linked user phone
+            # SMS: send ONLY to guardian phone
             if campaign.send_sms:
-                phone = (
-                    getattr(stu, 'guardian_id', None)
-                    or getattr(stu, 'phone', None)
-                    or getattr(getattr(stu, 'user', None), 'phone', None)
-                )
+                phone = getattr(stu, 'guardian_id', None)
                 if phone:
                     ok = False
                     try:
@@ -685,8 +718,8 @@ def notify_enrollment(student) -> bool:
             except Exception:
                 pass
 
-        # SMS
-        phone = getattr(student, 'phone', None) or getattr(getattr(student, 'user', None), 'phone', None)
+        # SMS -> guardian phone only
+        phone = getattr(student, 'guardian_id', None)
         if phone:
             try:
                 send_sms(phone, body)
@@ -755,8 +788,8 @@ def notify_payment_received(invoice, payment) -> bool:
             except Exception:
                 pass
 
-        # SMS
-        phone = getattr(student, 'phone', None) or getattr(getattr(student, 'user', None), 'phone', None)
+        # SMS -> guardian phone only
+        phone = getattr(student, 'guardian_id', None)
         if phone:
             try:
                 send_sms(phone, body)

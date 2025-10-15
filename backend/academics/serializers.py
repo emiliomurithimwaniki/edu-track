@@ -60,6 +60,12 @@ class ClassSerializer(serializers.ModelSerializer):
             'name': {'read_only': True}
         }
 
+# Lightweight class serializer for list views where only basic labels are needed
+class ClassLiteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Class
+        fields = ['id', 'name', 'grade_level']
+
 class StudentSerializer(serializers.ModelSerializer):
     user_id = serializers.PrimaryKeyRelatedField(queryset=User.objects.all(), source='user', write_only=True, required=False, allow_null=True)
     # Include class details for better display on dashboards
@@ -83,6 +89,30 @@ class StudentSerializer(serializers.ModelSerializer):
                 return url
             except Exception:
                 return None
+
+# Lightweight student list serializer for faster collections
+class StudentListSerializer(serializers.ModelSerializer):
+    klass_detail = ClassLiteSerializer(source='klass', read_only=True)
+    photo_url = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = Student
+        fields = [
+            'id','admission_no','name','dob','gender','upi_number','guardian_id','klass','klass_detail','photo','photo_url',
+            'is_graduated','graduation_year'
+        ]
+
+    def get_photo_url(self, obj):
+        request = self.context.get('request')
+        if getattr(obj, 'photo', None):
+            try:
+                url = obj.photo.url
+                if request:
+                    return request.build_absolute_uri(url)
+                return url
+            except Exception:
+                return None
+        return None
         return None
 
 class CompetencySerializer(serializers.ModelSerializer):

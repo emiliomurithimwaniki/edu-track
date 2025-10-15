@@ -27,6 +27,8 @@ if '.onrender.com' not in ALLOWED_HOSTS:
 # Add ngrok domain(s) for temporary public exposure
 # Prefer env-provided host/url to avoid code edits each time the tunnel changes
 NGROK_HOST = os.getenv('NGROK_HOST', '').strip()
+NGROK_ORIGIN = ''
+NGROK_ORIGIN_HTTP = ''
 if not NGROK_HOST:
     # Allow passing full URL via NGROK_URL, e.g. https://1234.ngrok-free.app
     ngrok_url = os.getenv('NGROK_URL', '').strip().rstrip('/')
@@ -223,9 +225,9 @@ CORS_ALLOWED_ORIGINS = [o for o in os.getenv('CORS_ALLOWED_ORIGINS', '').split('
 
 # Ensure ngrok origin is allowed for CORS when not fully open
 if not CORS_ALLOW_ALL_ORIGINS:
-    if NGROK_ORIGIN not in CORS_ALLOWED_ORIGINS:
+    if NGROK_ORIGIN and NGROK_ORIGIN not in CORS_ALLOWED_ORIGINS:
         CORS_ALLOWED_ORIGINS.append(NGROK_ORIGIN)
-    if NGROK_ORIGIN_HTTP not in CORS_ALLOWED_ORIGINS:
+    if NGROK_ORIGIN_HTTP and NGROK_ORIGIN_HTTP not in CORS_ALLOWED_ORIGINS:
         CORS_ALLOWED_ORIGINS.append(NGROK_ORIGIN_HTTP)
 
 # Email configuration (use environment variables; defaults are Gmail-friendly)
