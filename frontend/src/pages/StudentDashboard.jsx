@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import api from '../api'
 import Modal from '../components/Modal'
+import StatCard from '../components/StatCard'
 
 export default function StudentDashboard(){
   const { pathname } = useLocation()
@@ -71,6 +72,17 @@ export default function StudentDashboard(){
     return { total, average }
   }, [reportRows])
 
+  const groupedExamResults = useMemo(() => {
+    if (!Array.isArray(examResults) || examResults.length === 0) return []
+    const m = new Map()
+    for (const r of examResults) {
+      const name = r.exam_detail?.name || r.exam || 'Exam'
+      if (!m.has(name)) m.set(name, [])
+      m.get(name).push(r)
+    }
+    return Array.from(m.entries())
+  }, [examResults])
+
   useEffect(()=>{
     let mounted = true
     ;(async () => {
@@ -98,10 +110,22 @@ export default function StudentDashboard(){
         ])
         if (!mounted) return
         const [assS, attS, exmS, invS, sumS] = settled
-        setAssessments(assS.status==='fulfilled' ? (assS.value?.data || []) : [])
-        setAttendance(attS.status==='fulfilled' ? (attS.value?.data || []) : [])
-        setExamResults(exmS.status==='fulfilled' ? (exmS.value?.data || []) : [])
-        setInvoices(invS.status==='fulfilled' ? (invS.value?.data || []) : [])
+        setAssessments(assS.status==='fulfilled'
+          ? (Array.isArray(assS.value?.data) ? assS.value.data : (assS.value?.data?.results || []))
+          : []
+        )
+        setAttendance(attS.status==='fulfilled'
+          ? (Array.isArray(attS.value?.data) ? attS.value.data : (attS.value?.data?.results || []))
+          : []
+        )
+        setExamResults(exmS.status==='fulfilled'
+          ? (Array.isArray(exmS.value?.data) ? exmS.value.data : (exmS.value?.data?.results || []))
+          : []
+        )
+        setInvoices(invS.status==='fulfilled'
+          ? (Array.isArray(invS.value?.data) ? invS.value.data : (invS.value?.data?.results || []))
+          : []
+        )
         setSummary(sumS.status==='fulfilled' ? (sumS.value?.data || { total_billed:0, total_paid:0, balance:0 }) : { total_billed:0, total_paid:0, balance:0 })
       } catch (e) {
         if (!mounted) return
@@ -166,8 +190,17 @@ export default function StudentDashboard(){
   return (
     <div className="p-6 space-y-6">
       {/* Header banner (no buttons; navigation is in sidebar) */}
-      <div className="bg-green-600 text-white rounded shadow p-3">
-        <div className="font-medium">Welcome {student?.name ? student.name.toUpperCase() : ''}</div>
+      <div className="rounded-xl p-4 sm:p-5 bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-xs opacity-90">Welcome</div>
+            <div className="text-lg sm:text-xl font-semibold tracking-tight">{student?.name ? student.name.toUpperCase() : ''}</div>
+            <div className="text-xs opacity-90 mt-1">{student ? (classLabel || '') : ''}</div>
+          </div>
+          <div className="hidden sm:block w-12 h-12 rounded-xl bg-white/15 backdrop-blur flex items-center justify-center text-2xl">
+            <span>🎓</span>
+          </div>
+        </div>
       </div>
 
       {loading && (
@@ -182,27 +215,37 @@ export default function StudentDashboard(){
       {currentTab === 'dashboard' && (
         <>
           {/* Summary cards */}
-          <div className="grid md:grid-cols-3 gap-4">
-            <div className="bg-amber-500 text-white rounded shadow p-4">
-              <div className="text-sm opacity-90">Total Billed</div>
-              <div className="text-2xl font-semibold">{money(summary.total_billed)}</div>
-              <div className="text-xs mt-1 opacity-90">All time invoiced</div>
-            </div>
-            <div className="bg-green-600 text-white rounded shadow p-4">
-              <div className="text-sm opacity-90">Total Paid</div>
-              <div className="text-2xl font-semibold">{money(summary.total_paid)}</div>
-              <div className="text-xs mt-1 opacity-90">All time payments</div>
-            </div>
-            <div className="bg-sky-600 text-white rounded shadow p-4">
-              <div className="text-sm opacity-90">Balance</div>
-              <div className="text-2xl font-semibold">{money(summary.balance)}</div>
-              <div className="text-xs mt-1 opacity-90">Outstanding</div>
-            </div>
+          <div className="grid gap-4 md:grid-cols-3">
+            <StatCard
+              title="Total Billed"
+              value={Number(summary.total_billed||0)}
+              accent="from-amber-500 to-orange-600"
+              icon="🧾"
+              animate
+              format={(v)=>money(v)}
+            />
+            <StatCard
+              title="Total Paid"
+              value={Number(summary.total_paid||0)}
+              accent="from-emerald-500 to-emerald-600"
+              icon="💳"
+              animate
+              format={(v)=>money(v)}
+              trend={summary.total_paid && summary.total_billed ? ((summary.total_paid/Math.max(1, summary.total_billed))*100) : 0}
+            />
+            <StatCard
+              title="Balance"
+              value={Number(summary.balance||0)}
+              accent="from-sky-500 to-blue-600"
+              icon="📉"
+              animate
+              format={(v)=>money(v)}
+            />
           </div>
 
           {/* User Profile */}
           {student && (
-            <div className="bg-white rounded shadow p-0 overflow-hidden">
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
               <div className="border-b px-4 py-2 font-medium flex items-center justify-between">
                 <span>User Profile</span>
                 <button
@@ -212,7 +255,7 @@ export default function StudentDashboard(){
               </div>
               <div className="grid md:grid-cols-3 gap-0">
                 <div className="p-4 border-r">
-                  <div className="w-40 h-40 bg-gray-100 rounded overflow-hidden flex items-center justify-center">
+                  <div className="w-40 h-40 bg-gray-100 rounded-xl overflow-hidden flex items-center justify-center border border-gray-200">
                     {student.photo_url ? (
                       <img src={student.photo_url} alt="Student" className="w-full h-full object-cover" />
                     ) : (
@@ -289,25 +332,25 @@ export default function StudentDashboard(){
 
           {/* Assessments and Attendance */}
           <div className="grid md:grid-cols-2 gap-6">
-            <div className="bg-white rounded shadow p-4">
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
               <h2 className="font-medium mb-2">Assessments</h2>
-              {assessments.length === 0 ? (
+              {!Array.isArray(assessments) || assessments.length === 0 ? (
                 <div className="text-sm text-gray-500">No assessments yet.</div>
               ) : (
                 <table className="w-full text-left text-sm">
-                  <thead>
+                  <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th>Competency</th>
-                      <th>Level</th>
-                      <th>Date</th>
+                      <th className="py-2 px-2">Competency</th>
+                      <th className="py-2 px-2">Level</th>
+                      <th className="py-2 px-2">Date</th>
                     </tr>
                   </thead>
                   <tbody>
                     {assessments.map(a => (
-                      <tr key={a.id} className="border-t">
-                        <td>{a.competency}</td>
-                        <td>{a.level}</td>
-                        <td>{a.date}</td>
+                      <tr key={a.id} className="border-t hover:bg-gray-50">
+                        <td className="py-2 px-2">{a.competency}</td>
+                        <td className="py-2 px-2">{a.level}</td>
+                        <td className="py-2 px-2">{a.date}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -315,23 +358,23 @@ export default function StudentDashboard(){
               )}
             </div>
 
-            <div className="bg-white rounded shadow p-4">
+            <div className="bg-white rounded-xl border border-gray-200 p-4">
               <h2 className="font-medium mb-2">Attendance</h2>
-              {attendance.length === 0 ? (
+              {!Array.isArray(attendance) || attendance.length === 0 ? (
                 <div className="text-sm text-gray-500">No attendance records yet.</div>
               ) : (
                 <table className="w-full text-left text-sm">
-                  <thead>
+                  <thead className="bg-gray-50 text-gray-600">
                     <tr>
-                      <th>Date</th>
-                      <th>Status</th>
+                      <th className="py-2 px-2">Date</th>
+                      <th className="py-2 px-2">Status</th>
                     </tr>
                   </thead>
                   <tbody>
                     {attendance.map(at => (
-                      <tr key={at.id} className="border-t">
-                        <td>{at.date}</td>
-                        <td className="capitalize">{at.status}</td>
+                      <tr key={at.id} className="border-t hover:bg-gray-50">
+                        <td className="py-2 px-2">{at.date}</td>
+                        <td className="py-2 px-2 capitalize">{at.status}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -341,44 +384,49 @@ export default function StudentDashboard(){
           </div>
 
           {/* Performance Over Time */}
-          <div className="bg-white rounded shadow p-4">
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
             <h2 className="font-medium mb-3">Performance Over Time</h2>
-            {performance.length === 0 ? (
-              <div className="text-sm text-gray-500">No exam performance data yet.</div>
-            ) : (
+            {Array.isArray(performance) && performance.length > 0 ? (
               <ResponsiveLine data={performance} />
+            ) : (
+              <div className="text-sm text-gray-500">No exam performance data yet.</div>
             )}
           </div>
 
           {/* Exam Results */}
-          <div className="bg-white rounded shadow p-4">
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
             <h2 className="font-medium mb-2">Exam Results</h2>
-            {examResults.length === 0 ? (
+            {!Array.isArray(examResults) || examResults.length === 0 ? (
               <div className="text-sm text-gray-500">No exam results yet.</div>
             ) : (
               <table className="w-full text-left text-sm">
-                <thead>
+                <thead className="bg-gray-50 text-gray-600">
                   <tr>
-                    <th>Exam</th>
-                    <th>Subject</th>
-                    <th>Marks</th>
+                    <th className="py-2 px-2">Subject</th>
+                    <th className="py-2 px-2">Marks</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {examResults.map(r => (
-                    <tr key={r.id} className="border-t">
-                      <td>{r.exam_detail?.name || r.exam}</td>
-                      <td>
-                        {r.subject_detail
-                          ? (
-                              (r.subject_detail.code ? `${r.subject_detail.code} — ` : '') +
-                              (r.subject_detail.name || '')
-                            )
-                          : r.subject
-                        }
-                      </td>
-                      <td>{r.marks}</td>
-                    </tr>
+                  {groupedExamResults.map(([examName, rows]) => (
+                    <React.Fragment key={examName}>
+                      <tr className="border-t bg-gray-50/70">
+                        <td className="py-2 px-2 font-medium" colSpan={2}>{examName}</td>
+                      </tr>
+                      {rows.map(r => (
+                        <tr key={r.id} className="border-t hover:bg-gray-50">
+                          <td className="py-2 px-2">
+                            {r.subject_detail
+                              ? (
+                                  (r.subject_detail.code ? `${r.subject_detail.code} — ` : '') +
+                                  (r.subject_detail.name || '')
+                                )
+                              : r.subject
+                            }
+                          </td>
+                          <td className="py-2 px-2">{r.marks}</td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -388,16 +436,13 @@ export default function StudentDashboard(){
       )}
 
       {currentTab === 'finance' && (
-      <div className="bg-white rounded shadow p-4">
-        <div className="flex items-center justify-between mb-2">
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
           <h2 className="font-medium">My Fees</h2>
-          <div className="flex items-center gap-3">
-            <div className="text-sm">
-              <span className="mr-4">Billed: <strong>{Number(summary.total_billed||0).toLocaleString()}</strong></span>
-              <span className="mr-4">Paid: <strong>{Number(summary.total_paid||0).toLocaleString()}</strong></span>
-              <span>Balance: <strong className={Number(summary.balance)>0? 'text-red-700':''}>{Number(summary.balance||0).toLocaleString()}</strong></span>
-            </div>
-            {/* Top-level Make Payment button */}
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border bg-amber-50 text-amber-700 border-amber-200">Billed <strong className="ml-1">{Number(summary.total_billed||0).toLocaleString()}</strong></span>
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">Paid <strong className="ml-1">{Number(summary.total_paid||0).toLocaleString()}</strong></span>
+            <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border ${Number(summary.balance)>0? 'bg-rose-50 text-rose-700 border-rose-200':'bg-sky-50 text-sky-700 border-sky-200'}`}>Balance <strong className="ml-1">{Number(summary.balance||0).toLocaleString()}</strong></span>
             {invoices.some(inv => inv.status==='unpaid' || inv.status==='partial') && (
               <button
                 onClick={()=>{
@@ -407,33 +452,52 @@ export default function StudentDashboard(){
                   setPayError('')
                   setShowPay(true)
                 }}
-                className="px-3 py-1.5 rounded text-white bg-green-600 hover:bg-green-700"
+                className="ml-auto px-3 py-1.5 rounded text-white bg-green-600 hover:bg-green-700"
               >
                 Make Payment
               </button>
             )}
           </div>
         </div>
-        <table className="w-full text-left text-sm">
-          <thead><tr><th>Date</th><th>Category</th><th>Year/Term</th><th>Amount</th><th>Status</th><th>Due</th><th></th></tr></thead>
-          <tbody>
-            {invoices.map(inv => (
-              <tr key={inv.id} className="border-t">
-                <td className="py-1.5">{new Date(inv.created_at).toLocaleDateString()}</td>
-                <td>{inv.category_detail?.name || '-'}</td>
-                <td>{inv.year ? `${inv.year} / T${inv.term}` : '-'}</td>
-                <td>{Number(inv.amount).toLocaleString()}</td>
-                <td>{inv.status}</td>
-                <td>{inv.due_date || '-'}</td>
-                <td className="text-right">
-                  {(inv.status === 'unpaid' || inv.status === 'partial') && (
-                    <button onClick={()=>openPay(inv)} className="px-3 py-1.5 rounded text-white bg-green-600 hover:bg-green-700">Pay</button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+
+        {invoices.length === 0 ? (
+          <div className="rounded-lg border border-dashed p-6 text-sm text-gray-600 bg-gray-50">You have no invoices yet.</div>
+        ) : (
+          <div className="overflow-auto rounded-lg border">
+            <table className="w-full text-left text-sm min-w-[720px]">
+              <thead className="bg-gray-50 text-gray-600">
+                <tr>
+                  <th className="py-2 px-2">Date</th>
+                  <th className="py-2 px-2">Category</th>
+                  <th className="py-2 px-2">Year/Term</th>
+                  <th className="py-2 px-2">Amount</th>
+                  <th className="py-2 px-2">Status</th>
+                  <th className="py-2 px-2">Due</th>
+                  <th className="py-2 px-2 text-right"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoices.map(inv => (
+                  <tr key={inv.id} className="border-t hover:bg-gray-50/60">
+                    <td className="py-2 px-2">{new Date(inv.created_at).toLocaleDateString()}</td>
+                    <td className="py-2 px-2">{inv.category_detail?.name || '-'}</td>
+                    <td className="py-2 px-2">{inv.year ? `${inv.year} / T${inv.term}` : '-'}</td>
+                    <td className="py-2 px-2">{Number(inv.amount).toLocaleString()}</td>
+                    <td className="py-2 px-2">
+                      <span className={`text-[11px] px-2 py-0.5 rounded-full border ${inv.status==='paid' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : inv.status==='partial' ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>{inv.status}</span>
+                    </td>
+                    <td className="py-2 px-2">{inv.due_date || '-'}</td>
+                    <td className="py-2 px-2 text-right">
+                      {(inv.status === 'unpaid' || inv.status === 'partial') && (
+                        <button onClick={()=>openPay(inv)} className="px-3 py-1.5 rounded text-white bg-green-600 hover:bg-green-700">Pay</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
       )}
 

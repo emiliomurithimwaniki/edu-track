@@ -2,6 +2,7 @@ from rest_framework.decorators import api_view, permission_classes, parser_class
 from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
 import json
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.contrib.auth import get_user_model
 from .serializers import UserSerializer, SchoolSerializer
@@ -63,7 +64,7 @@ def users(request):
     role = request.query_params.get('role')
     q = request.query_params.get('q')
     param_school_id = request.query_params.get('school')
-    qs = User.objects.all()
+    qs = User.objects.all().select_related('school')
     # Scope by school: default to the request user's school for all roles
     user_school_id = getattr(getattr(request.user, 'school', None), 'id', None)
     if param_school_id:
@@ -94,8 +95,27 @@ def users(request):
                 Q(last_name__icontains=q) |
                 Q(email__icontains=q)
             )
+    # Order by stable key
     qs = qs.order_by('id')
-    return Response(UserSerializer(qs, many=True).data)
+
+    # Narrow fields to those used by UserSerializer and nested SchoolSerializer
+    try:
+        qs = qs.only(
+            'id','username','first_name','last_name','email','role','phone','is_staff','is_superuser','email_verified','profile_picture',
+            'school','school__id','school__name','school__code','school__address','school__motto','school__aim','school__logo','school__social_links',
+            'school__is_trial','school__trial_expires_at','school__trial_student_limit','school__feature_flags',
+        )
+    except Exception:
+        # Fallback if .only causes issues
+        pass
+
+    # Paginate
+    paginator = PageNumberPagination()
+    page = paginator.paginate_queryset(qs, request)
+    if page is not None:
+        ser = UserSerializer(page, many=True, context={"request": request})
+        return paginator.get_paginated_response(ser.data)
+    return Response(UserSerializer(qs, many=True, context={"request": request}).data)
 
 
 @api_view(["POST"])

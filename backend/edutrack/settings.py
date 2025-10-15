@@ -4,10 +4,11 @@ from datetime import timedelta
 from dotenv import load_dotenv
 import dj_database_url
 
-# Ensure .env takes precedence over any pre-set OS environment variables
-load_dotenv(override=True)
-
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Ensure .env takes precedence over any pre-set OS environment variables
+# Explicitly load the .env located in the project base directory (backend/)
+load_dotenv(dotenv_path=BASE_DIR / '.env', override=True)
 
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret-key-change-me')
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
@@ -148,6 +149,7 @@ else:
             'HOST': os.getenv('POSTGRES_HOST', ''),
             'PORT': os.getenv('POSTGRES_PORT', '5432'),
             'OPTIONS': {'sslmode': 'require'},
+            'CONN_MAX_AGE': 600,
         }
     }
 
@@ -169,6 +171,9 @@ REST_FRAMEWORK = {
         'django_filters.rest_framework.DjangoFilterBackend',
     ),
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    # Pagination to prevent huge payloads on list endpoints
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50,
 }
 
 SPECTACULAR_SETTINGS = {

@@ -503,7 +503,7 @@ export default function Messages(){
   }, [conversation.length])
 
   return (
-    <div className="h-[calc(100vh-6rem)] bg-white border rounded-md overflow-hidden flex">
+    <div className="mx-auto max-w-6xl w-full min-h-[calc(100vh-5rem)] md:h-[calc(100vh-5rem)] bg-white border rounded-xl overflow-hidden flex shadow-card">
       {/* Left: Users list */}
       <aside className="hidden sm:flex w-80 border-r flex-col">
         <div className="flex border-b">
@@ -533,6 +533,7 @@ export default function Messages(){
             value={query}
             onChange={e=>setQuery(e.target.value)}
             placeholder="Search users..."
+            autoComplete="off"
             className="w-full border rounded px-3 py-2"
           />
         </div>
@@ -622,7 +623,7 @@ export default function Messages(){
             <div className="font-medium">Users</div>
           </div>
           <div className="p-3 border-b">
-            <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search users..." className="w-full border rounded px-3 py-2" />
+            <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search users..." autoComplete="off" className="w-full border rounded px-3 py-2" />
           </div>
           <div className="flex-1 overflow-y-auto">
             {sortedUsers.map(u => {
@@ -885,7 +886,7 @@ export default function Messages(){
               <button className="px-2 py-1 rounded border" onClick={()=>setShowForwardModal(false)}>Close</button>
             </div>
             <div className="p-3 border-b">
-              <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search users..." className="w-full border rounded px-3 py-2" />
+              <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search users..." autoComplete="off" className="w-full border rounded px-3 py-2" />
             </div>
             <div className="max-h-80 overflow-auto p-2 space-y-1">
               {sortedUsers.filter(u=>u.id!==user?.id).map(u=>{
