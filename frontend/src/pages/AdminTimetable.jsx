@@ -906,21 +906,25 @@ export default function AdminTimetable() {
             Saved at {new Date(lastSavedAt).toLocaleTimeString()}
           </div>
         )}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Timetable</h1>
             <p className="text-gray-600 mt-1">Manage and view school-wide timetables.</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto -mx-1 px-1">
             <button
               onClick={openManage}
-              className="px-4 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-800 text-sm font-medium shadow-sm">
-              Manage Timetables
+              className="shrink-0 inline-flex items-center gap-0 sm:gap-2 px-2.5 sm:px-4 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-800 text-sm font-medium shadow-sm"
+              aria-label="Manage Timetables">
+              <span className="sm:hidden">📋</span>
+              <span className="hidden sm:inline">Manage Timetables</span>
             </button>
             <button
               onClick={()=>setShowCreate(true)}
-              className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium shadow">
-              New Timetable
+              className="shrink-0 inline-flex items-center gap-0 sm:gap-2 px-2.5 sm:px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium shadow"
+              aria-label="New Timetable">
+              <span className="sm:hidden">➕</span>
+              <span className="hidden sm:inline">New Timetable</span>
             </button>
           </div>
         </div>
@@ -1084,6 +1088,18 @@ export default function AdminTimetable() {
                     <div>
                       <div className="text-sm font-medium mb-1">Max priority per day (per class)</div>
                       <input type="number" min={1} max={6} className="border rounded px-2 py-1 w-28" value={priorityMaxPerDay} onChange={e=>setPriorityMaxPerDay(Number(e.target.value||2))} />
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium mb-1">Max lessons per teacher per day</div>
+                      <input
+                        type="number"
+                        min={1}
+                        max={12}
+                        className="border rounded px-2 py-1 w-28"
+                        value={maxTeacherLessonsPerDay}
+                        onChange={e=>setMaxTeacherLessonsPerDay(Number(e.target.value||5))}
+                      />
+                      <div className="text-xs text-gray-500 mt-1">Auto-generate will not assign more than this number of lessons to the same teacher in a single day.</div>
                     </div>
                   </div>
                 </div>

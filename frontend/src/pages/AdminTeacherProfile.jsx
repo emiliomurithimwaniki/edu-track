@@ -23,6 +23,7 @@ export default function AdminTeacherProfile(){
     phone: '',
     subjects: '',
     klass: '',
+    tsc_number: '',
   })
 
   useEffect(()=>{
@@ -44,7 +45,8 @@ export default function AdminTeacherProfile(){
             username: tRes.data?.user?.username || '',
             phone: tRes.data?.user?.phone || '',
             subjects: tRes.data?.subjects || '',
-            klass: tRes.data?.klass || ''
+            klass: tRes.data?.klass || '',
+            tsc_number: tRes.data?.tsc_number || '',
           })
         }
       } catch (e) {
@@ -78,6 +80,7 @@ export default function AdminTeacherProfile(){
       })
       // 2) Update teacher profile subjects and klass
       const body = { subjects: form.subjects || '' }
+      if (form.tsc_number !== undefined) body.tsc_number = form.tsc_number || null
       // Allow clearing class by setting null
       if (form.klass === '' || form.klass === null) {
         body.klass = null
@@ -156,6 +159,10 @@ export default function AdminTeacherProfile(){
                     <span key={i} className="px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-700">{s}</span>
                   ))}
                 </div>
+              </div>
+              <div>
+                <label className="text-gray-500 text-sm">T.S.C number</label>
+                <input className="border rounded w-full p-2" value={form.tsc_number} onChange={e=>setForm({...form, tsc_number:e.target.value})} />
               </div>
               <div>
                 <label className="text-gray-500 text-sm">Assigned Class (Class Teacher)</label>

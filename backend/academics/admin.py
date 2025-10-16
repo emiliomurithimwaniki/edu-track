@@ -22,14 +22,14 @@ class ClassAdmin(admin.ModelAdmin):
 
 @admin.register(TeacherProfile)
 class TeacherProfileAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "subjects", "klass")
+    list_display = ("id", "user", "subjects", "klass", "tsc_number")
     search_fields = ("user__username", "user__first_name", "user__last_name", "subjects")
 
 @admin.register(Student)
 class StudentAdmin(admin.ModelAdmin):
-    list_display = ("id", "admission_no", "name", "upi_number", "klass", "gender", "guardian_id", "is_graduated", "graduation_year")
+    list_display = ("id", "admission_no", "name", "upi_number", "klass", "gender", "guardian_id", "guardian_name", "guardian_passport_no", "birth_certificate_no", "is_graduated", "graduation_year")
     list_filter = ("gender", "klass__grade_level", "is_graduated", "graduation_year")
-    search_fields = ("admission_no", "name", "upi_number", "guardian_id")
+    search_fields = ("admission_no", "name", "upi_number", "guardian_id", "guardian_name", "guardian_passport_no", "birth_certificate_no")
 
 @admin.register(Competency)
 class CompetencyAdmin(admin.ModelAdmin):

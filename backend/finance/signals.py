@@ -2,7 +2,8 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 
 from academics.models import Student
-from .models import PocketMoneyWallet, ClassFee, Invoice
+from accounts.models import School
+from .models import PocketMoneyWallet, ClassFee, Invoice, FeeCategory
 from django.utils import timezone
 
 
@@ -17,6 +18,39 @@ def ensure_wallet_for_student(sender, instance: Student, created, **kwargs):
     except Exception:
         # Best-effort; avoid breaking student save
         pass
+
+
+@receiver(post_save, sender=School)
+def ensure_boarding_fee_category(sender, instance: School, created, **kwargs):
+    """Ensure each School has a non-deletable 'Boarding fees' FeeCategory with default description.
+    Amounts are managed via ClassFee per class/term and default to 0 when created by admin.
+    """
+    try:
+        FeeCategory.objects.get_or_create(
+            school=instance,
+            name='Boarding fees',
+            defaults={
+                'description': 'Boarding-only fee category (applies to boarders).',
+            }
+        )
+    except Exception:
+        # Silent best-effort
+        pass
+
+# Best-effort backfill on import (safe guard for existing schools)
+try:
+    for _school in School.objects.all():
+        try:
+            FeeCategory.objects.get_or_create(
+                school=_school,
+                name='Boarding fees',
+                defaults={'description': 'Boarding-only fee category (applies to boarders).'}
+            )
+        except Exception:
+            continue
+except Exception:
+    # Avoid crashing during migrations/app loading
+    pass
 
 
 @receiver(post_save, sender=Student)
@@ -62,6 +96,14 @@ def ensure_invoices_for_assigned_class(sender, instance: Student, created, **kwa
         # Create/update invoices for all class fees in that period
         fees = ClassFee.objects.filter(klass_id=instance.klass_id, year=year, term=term_number)
         for cf in fees:
+            try:
+                # Only apply boarding-related fees to boarders
+                cat_name = str(getattr(cf.fee_category, 'name', '') or '').strip().lower()
+                is_boarding_category = ('board' in cat_name)  # matches 'boarding', 'boarding fees', etc.
+                if is_boarding_category and str(getattr(instance, 'boarding_status', 'day')).lower() != 'boarding':
+                    continue
+            except Exception:
+                pass
             inv, created_inv = Invoice.objects.get_or_create(
                 student=instance,
                 category=cf.fee_category,
@@ -82,6 +124,9 @@ def ensure_invoices_for_assigned_class(sender, instance: Student, created, **kwa
                     inv.due_date = cf.due_date; updated = True
                 if updated:
                     inv.save(update_fields=['amount','due_date'])
+
+        # Removed: automatic per-student Boarding invoice creation. Boarding fees now come only from ClassFee
+        # for the student's class and current period, while skipping non-boarders above.
     except Exception:
         # Silent fail to avoid blocking student saves
         pass

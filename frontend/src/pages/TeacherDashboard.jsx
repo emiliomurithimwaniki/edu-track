@@ -495,16 +495,16 @@ function MiniCalendar({ events=[], month=new Date(), onPrev, onNext, onToday }){
   return (
     <div className="overflow-hidden">
       <div className="flex items-center justify-between mb-3">
-        <div className="text-sm text-gray-600">{month.toLocaleString(undefined,{ month:'long', year:'numeric' })}</div>
-        <div className="flex items-center gap-2">
-          <button onClick={onPrev} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" aria-label="Previous month">‹</button>
-          <button onClick={onNext} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" aria-label="Next month">›</button>
-          <button onClick={onToday} className="px-2 py-1 text-xs rounded-full border border-gray-200 hover:bg-gray-50">Today</button>
+        <div className="text-xs sm:text-sm text-gray-600 font-medium">{month.toLocaleString(undefined,{ month:'long', year:'numeric' })}</div>
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <button onClick={onPrev} className="p-2 sm:p-2.5 rounded-full border border-gray-200 hover:bg-gray-50" aria-label="Previous month">‹</button>
+          <button onClick={onNext} className="p-2 sm:p-2.5 rounded-full border border-gray-200 hover:bg-gray-50" aria-label="Next month">›</button>
+          <button onClick={onToday} className="px-2 py-1 text-[10px] sm:text-xs rounded-full border border-gray-200 hover:bg-gray-50">Today</button>
         </div>
       </div>
       <div className="space-y-3">
-        <div className="grid grid-cols-7 text-[11px] font-semibold text-gray-500 mb-2">
-          {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=> <div key={d} className="px-1 py-1 text-center tracking-wide">{d}</div>)}
+        <div className="grid grid-cols-7 text-[10px] sm:text-[11px] font-semibold text-gray-500 mb-2">
+          {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=> <div key={d} className="px-0.5 sm:px-1 py-0.5 sm:py-1 text-center tracking-wide">{d}</div>)}
         </div>
         <div className="grid grid-cols-7 gap-1">
           {monthDays.map((d,i)=>{
@@ -516,24 +516,24 @@ function MiniCalendar({ events=[], month=new Date(), onPrev, onNext, onToday }){
             const baseBg = inMonth ? 'bg-white' : 'bg-gray-50'
             const activeBg = color ? color.chip.split(' ').find(c=>c.startsWith('bg-')) : baseBg
             return (
-              <div key={i} className={`relative rounded-xl min-h-[56px] sm:min-h-[68px] p-2 text-[11px] sm:text-xs border ${inMonth? 'border-gray-200':'border-gray-200/70'} ${dayEvents.length? activeBg : baseBg} hover:border-indigo-300 hover:shadow-soft transition-all`}>
+              <div key={i} className={`relative rounded-xl min-h-[52px] sm:min-h-[68px] p-1.5 sm:p-2 text-[10px] sm:text-xs border ${inMonth? 'border-gray-200':'border-gray-200/70'} ${dayEvents.length? activeBg : baseBg} hover:border-indigo-300 transition-all`}>
                 <div className="flex items-center justify-between">
-                  <div className={`${inMonth? 'text-gray-800':'text-gray-400'} text-[11px] font-semibold`}>{d.getDate()}</div>
-                  {isToday && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">Today</span>}
+                  <div className={`${inMonth? 'text-gray-800':'text-gray-400'} text-[10px] sm:text-[11px] font-semibold`}>{d.getDate()}</div>
+                  {isToday && <span className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">Today</span>}
                 </div>
                 <div className="mt-1 flex flex-wrap gap-1">
                   {dayEvents.slice(0,2).map(ev => {
                     const c = colorForEvent(ev)
                     return (
-                      <span key={ev.id} className={`px-1.5 py-0.5 rounded-full text-[10px] border truncate max-w-full ${c.chip}`} title={ev.title}>
+                      <span key={ev.id} className={`px-1.5 py-0.5 rounded-full text-[9px] sm:text-[10px] border truncate max-w-full ${c.chip}`} title={ev.title}>
                         {ev.title}
                       </span>
                     )
                   })}
-                  {dayEvents.length>2 && <span className="text-[10px] text-gray-500">+{dayEvents.length-2} more</span>}
+                  {dayEvents.length>2 && <span className="text-[9px] sm:text-[10px] text-gray-500">+{dayEvents.length-2} more</span>}
                 </div>
                 {dayEvents.length>0 && (
-                  <div className="absolute bottom-1 right-2 inline-flex items-center gap-1 text-[10px] text-gray-500">
+                  <div className="absolute bottom-1 right-2 inline-flex items-center gap-1 text-[9px] sm:text-[10px] text-gray-500">
                     <span className={`w-1.5 h-1.5 rounded-full ${color?.dot || 'bg-blue-500'}`} />
                     {dayEvents.length}
                   </div>

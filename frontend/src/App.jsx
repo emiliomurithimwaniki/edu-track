@@ -19,6 +19,7 @@ import TeacherProfile from './pages/TeacherProfile'
 import TeacherLayout from './components/TeacherLayout'
 import StudentDashboard from './pages/StudentDashboard'
 import StudentReportCard from './pages/StudentReportCard'
+import StudentReportCardViewer from './pages/StudentReportCardViewer'
 import StudentLayout from './components/StudentLayout'
 import FinanceDashboard from './pages/FinanceDashboard';
 import FinanceLayout from './components/FinanceLayout';
@@ -101,6 +102,7 @@ export default function App() {
             <Route path="/admin/students/:id" element={<ProtectedRoute roles={["admin"]}><AdminStudentDashboard/></ProtectedRoute>} />
             <Route path="/admin/students/:id/invoices" element={<ProtectedRoute roles={["admin"]}><AdminStudentInvoices/></ProtectedRoute>} />
             <Route path="/admin/students/:id/payments" element={<ProtectedRoute roles={["admin"]}><AdminStudentPayments/></ProtectedRoute>} />
+            <Route path="/admin/students/:id/report-card" element={<ProtectedRoute roles={["admin"]}><StudentReportCardViewer/></ProtectedRoute>} />
             <Route path="/admin/teachers" element={<ProtectedRoute roles={["admin"]}><AdminTeachers/></ProtectedRoute>} />
             <Route path="/admin/teachers/:id" element={<ProtectedRoute roles={["admin"]}><AdminTeacherProfile/></ProtectedRoute>} />
             <Route path="/admin/classes" element={<ProtectedRoute roles={["admin"]}><AdminClasses/></ProtectedRoute>} />
@@ -133,6 +135,7 @@ export default function App() {
             <Route path="/teacher/timetable" element={<ProtectedRoute roles={["teacher","admin"]}><TeacherLayout><TeacherTimetable/></TeacherLayout></ProtectedRoute>} />
             <Route path="/teacher/block-timetable" element={<ProtectedRoute roles={["teacher","admin"]}><TeacherLayout><TeacherBlockTimetable/></TeacherLayout></ProtectedRoute>} />
             <Route path="/teacher/events" element={<ProtectedRoute roles={["teacher","admin"]}><TeacherLayout><TeacherEvents/></TeacherLayout></ProtectedRoute>} />
+            <Route path="/teacher/students/:id/report-card" element={<ProtectedRoute roles={["teacher","admin"]}><TeacherLayout><StudentReportCardViewer/></TeacherLayout></ProtectedRoute>} />
             <Route path="/student" element={<ProtectedRoute roles={["student","admin"]}><StudentLayout><StudentDashboard/></StudentLayout></ProtectedRoute>} />
             <Route path="/student/messages" element={<ProtectedRoute roles={["student","admin"]}><StudentLayout><Messages/></StudentLayout></ProtectedRoute>} />
             <Route path="/student/academics" element={<ProtectedRoute roles={["student","admin"]}><StudentLayout><StudentDashboard/></StudentLayout></ProtectedRoute>} />

@@ -26,9 +26,12 @@ export default function AdminClasses(){
       api.get('/academics/subjects/'),
       api.get('/academics/streams/'),
     ])
-    setClasses(cl.data)
-    setSubjects(sbj.data)
-    setStreams(st.data)
+    const clArr = Array.isArray(cl.data) ? cl.data : (Array.isArray(cl.data?.results) ? cl.data.results : [])
+    const sbjArr = Array.isArray(sbj.data) ? sbj.data : (Array.isArray(sbj.data?.results) ? sbj.data.results : [])
+    const stArr = Array.isArray(st.data) ? st.data : (Array.isArray(st.data?.results) ? st.data.results : [])
+    setClasses(clArr)
+    setSubjects(sbjArr)
+    setStreams(stArr)
   }
   useEffect(()=>{ load() },[])
 

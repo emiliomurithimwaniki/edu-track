@@ -1,8 +1,73 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
+import StudentReportCardViewer from './StudentReportCardViewer'
 import AdminLayout from '../components/AdminLayout'
 import Modal from '../components/Modal'
 import api from '../api'
+
+function Selectors({ examResults, uiSelectedTerm, setUiSelectedTerm, uiSelectedExamId, setUiSelectedExamId }){
+  const termOptions = React.useMemo(()=>{
+    const s = new Set()
+    for (const r of (examResults||[])){
+      const ed = r.exam_detail || {}
+      if (!ed?.published) continue
+      if (ed.year && ed.term){ s.add(`${ed.year}-T${ed.term}`) }
+    }
+    return Array.from(s)
+  }, [examResults])
+
+  const parsedTerm = React.useMemo(()=>{
+    if (!uiSelectedTerm) return null
+    const [y,t] = String(uiSelectedTerm).split('-T')
+    const year = Number(y), term = Number(t)
+    if (!Number.isFinite(year) || !Number.isFinite(term)) return null
+    return { year, term }
+  }, [uiSelectedTerm])
+
+  const termExams = React.useMemo(()=>{
+    if (!parsedTerm) return []
+    const seen = new Set()
+    const out = []
+    for (const r of (examResults||[])){
+      const ed = r.exam_detail || {}
+      const id = ed.id || r.exam
+      if (!id || seen.has(String(id))) continue
+      if (!ed?.published) continue
+      if (ed.year === parsedTerm.year && ed.term === parsedTerm.term){
+        seen.add(String(id))
+        out.push({ id, name: ed.name || String(r.exam||'') })
+      }
+    }
+    return out
+  }, [examResults, parsedTerm])
+
+  React.useEffect(()=>{
+    if (!uiSelectedTerm && termOptions.length){
+      setUiSelectedTerm(termOptions[0])
+    }
+  }, [uiSelectedTerm, termOptions, setUiSelectedTerm])
+
+  React.useEffect(()=>{
+    if (!uiSelectedExamId && termExams.length){
+      setUiSelectedExamId(termExams[0].id)
+    }
+  }, [uiSelectedExamId, termExams, setUiSelectedExamId])
+
+  return (
+    <div className="mb-3 flex items-center gap-2">
+      <select className="px-2 py-1.5 border rounded bg-white text-sm" value={uiSelectedTerm || ''} onChange={(e)=> setUiSelectedTerm(e.target.value || null)} title="Select Term">
+        {termOptions.map(k=> (
+          <option key={k} value={k}>{k.replace('-', ' ')}</option>
+        ))}
+      </select>
+      <select className="px-2 py-1.5 border rounded bg-white text-sm" value={uiSelectedExamId || ''} onChange={(e)=> setUiSelectedExamId(e.target.value || null)} title="Select Exam">
+        {termExams.map(ex => (
+          <option key={ex.id} value={ex.id}>{ex.name}</option>
+        ))}
+      </select>
+    </div>
+  )
+}
 
 export default function AdminStudentDashboard() {
   const { id } = useParams()
@@ -10,6 +75,8 @@ export default function AdminStudentDashboard() {
   const [assessments, setAssessments] = useState([])
   const [attendance, setAttendance] = useState([])
   const [examResults, setExamResults] = useState([])
+  const [uiSelectedTerm, setUiSelectedTerm] = useState(null)
+  const [uiSelectedExamId, setUiSelectedExamId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [finance, setFinance] = useState({ total_billed: 0, total_paid: 0, balance: 0 })
@@ -26,7 +93,8 @@ export default function AdminStudentDashboard() {
     guardian_id: '',
     email: '',
     address: '',
-    passport_no: ''
+    passport_no: '',
+    boarding_status: 'day'
   })
 
   useEffect(() => {
@@ -45,11 +113,15 @@ export default function AdminStudentDashboard() {
         ])
         if (!isMounted) return
         setStudent(st.data)
-        setAssessments(asRes.data)
-        setAttendance(atRes.data)
-        setExamResults(exRes.data)
+        const assessArr = Array.isArray(asRes.data) ? asRes.data : (Array.isArray(asRes.data?.results) ? asRes.data.results : [])
+        const attendanceArr = Array.isArray(atRes.data) ? atRes.data : (Array.isArray(atRes.data?.results) ? atRes.data.results : [])
+        const examResArr = Array.isArray(exRes.data) ? exRes.data : (Array.isArray(exRes.data?.results) ? exRes.data.results : [])
+        setAssessments(assessArr)
+        setAttendance(attendanceArr)
+        setExamResults(examResArr)
         setFinance(fin.data)
-        setClasses(cl.data)
+        const classesData = Array.isArray(cl.data) ? cl.data : (Array.isArray(cl.data?.results) ? cl.data.results : [])
+        setClasses(classesData)
       } catch (e) {
         if (!isMounted) return
         setError(e?.response?.data?.detail || e?.message || 'Failed to load student dashboard')
@@ -94,7 +166,8 @@ export default function AdminStudentDashboard() {
       guardian_id: student.guardian_id || '',
       email: student.email || '',
       address: student.address || '',
-      passport_no: student.passport_no || ''
+      passport_no: student.passport_no || '',
+      boarding_status: student.boarding_status || 'day'
     })
     setShowEdit(true)
   }
@@ -112,7 +185,8 @@ export default function AdminStudentDashboard() {
         email: form.email,
         address: form.address,
         passport_no: form.passport_no,
-        klass: form.klass || null
+        klass: form.klass || null,
+        boarding_status: form.boarding_status
       }
       await api.patch(`/academics/students/${id}/`, payload)
       const { data } = await api.get(`/academics/students/${id}/`)
@@ -161,6 +235,13 @@ export default function AdminStudentDashboard() {
           >
             <span>➕</span>
             <span>Make Payment</span>
+          </Link>
+          <Link
+            to={`/admin/students/${id}/report-card`}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded bg-slate-700 text-white hover:bg-slate-800"
+          >
+            <span>🧾</span>
+            <span>View Report Card</span>
           </Link>
           <button
             onClick={openEdit}
@@ -236,6 +317,10 @@ export default function AdminStudentDashboard() {
                   <div>
                     <div className="text-gray-500">Gender</div>
                     <div className="font-medium">{student.gender || '-'}</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500">Boarding Status</div>
+                    <div className="font-medium capitalize">{student.boarding_status || 'day'}</div>
                   </div>
                   <div>
                     <div className="text-gray-500">Date of Birth</div>
@@ -316,28 +401,19 @@ export default function AdminStudentDashboard() {
         </div>
 
         <div className="bg-white rounded shadow p-4">
-          <h2 className="font-medium mb-2">Exam Results</h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="font-medium">Exam Results</h2>
+            <Link to={`/admin/students/${id}/report-card`} className="text-sm text-indigo-600 hover:underline">Open Printable</Link>
+          </div>
           {examResults.length === 0 ? (
             <div className="text-sm text-gray-500">No exam results yet.</div>
           ) : (
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr>
-                  <th>Exam</th>
-                  <th>Subject</th>
-                  <th>Marks</th>
-                </tr>
-              </thead>
-              <tbody>
-                {examResults.map(r => (
-                  <tr key={r.id} className="border-t">
-                    <td>{r.exam}</td>
-                    <td>{r.subject}</td>
-                    <td>{r.marks}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <Selectors examResults={examResults} uiSelectedTerm={uiSelectedTerm} setUiSelectedTerm={setUiSelectedTerm} uiSelectedExamId={uiSelectedExamId} setUiSelectedExamId={setUiSelectedExamId} />
+              <div className="-mx-4">
+                <StudentReportCardViewer embedded hideHistory showTermSelector={false} showExamSelector={false} showBackPrint={false} selectedTermYear={uiSelectedTerm} onSelectedTermYearChange={setUiSelectedTerm} selectedExamId={uiSelectedExamId} onSelectedExamIdChange={setUiSelectedExamId} />
+              </div>
+            </>
           )}
         </div>
       </div>
@@ -367,6 +443,13 @@ export default function AdminStudentDashboard() {
                 <option value="">Select</option>
                 <option value="Male">Male</option>
                 <option value="Female">Female</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-700 mb-1">Boarding Status</label>
+              <select className="w-full border rounded px-3 py-2" value={form.boarding_status} onChange={e=>setForm({...form, boarding_status:e.target.value})}>
+                <option value="day">Day</option>
+                <option value="boarding">Boarding</option>
               </select>
             </div>
             <div>

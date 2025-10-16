@@ -113,8 +113,9 @@ function PaymentHistory({ showError, onCount, onLoading }){
       const query = new URLSearchParams(params).toString()
       const url = '/finance/payments/' + (query? `?${query}`:'')
       const { data } = await api.get(url)
-      setItems(data)
-      onCount?.(data.length)
+      const arr = Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : [])
+      setItems(arr)
+      onCount?.(arr.length)
     } catch (err) {
       showError?.('Failed to Load Payments', err?.message || 'Failed')
     } finally {
@@ -137,10 +138,11 @@ function PaymentHistory({ showError, onCount, onLoading }){
     load({})
   }
 
-  const filtered = useMemo(()=>{
+  const filteredList = useMemo(()=>{
     const q = filters.q.trim().toLowerCase()
-    if (!q) return items
-    return items.filter(p => {
+    const src = Array.isArray(items) ? items : []
+    if (!q) return src
+    return src.filter(p => {
       const invoice = String(p.invoice || p.invoice_id || '').toLowerCase()
       const method = String(p.method||'').toLowerCase()
       const ref = String(p.reference||'').toLowerCase()
@@ -151,7 +153,8 @@ function PaymentHistory({ showError, onCount, onLoading }){
   }, [items, filters.q])
 
   const displayed = useMemo(()=>{
-    const arr = [...filtered]
+    const base = Array.isArray(filteredList) ? filteredList : []
+    const arr = [...base]
     const val = (p) => {
       switch (sortBy) {
         case 'amount': return Number(p.amount)||0
@@ -169,7 +172,7 @@ function PaymentHistory({ showError, onCount, onLoading }){
     })
     if (sortDir === 'desc') arr.reverse()
     return arr
-  }, [filtered, sortBy, sortDir])
+  }, [filteredList, sortBy, sortDir])
 
   const printResults = async () => {
     try {
@@ -313,7 +316,7 @@ function PaymentHistory({ showError, onCount, onLoading }){
               {loading ? (
                 <span className="inline-flex items-center gap-2"><div className="w-4 h-4 border-2 border-gray-300 border-t-indigo-500 rounded-full animate-spin"></div> Loading...</span>
               ) : (
-                <span className="inline-flex items-center gap-1"><span className="font-semibold text-gray-900">{filtered.length}</span> payments</span>
+                <span className="inline-flex items-center gap-1"><span className="font-semibold text-gray-900">{(Array.isArray(filteredList)?filteredList:[]).length}</span> payments</span>
               )}
             </div>
           </div>
@@ -482,8 +485,9 @@ function FeeCategories({ showSuccess, showError, onCount, onLoading }){
     onLoading?.(true)
     try {
       const { data } = await api.get('/finance/fee-categories/')
-      setItems(data)
-      onCount?.(data.length)
+      const arr = Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : [])
+      setItems(arr)
+      onCount?.(arr.length)
     } finally {
       setLoading(false)
       onLoading?.(false)
@@ -685,7 +689,12 @@ function FeeCategories({ showSuccess, showError, onCount, onLoading }){
                             <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
                               <span className="text-xs font-semibold text-blue-600">{item.name.charAt(0).toUpperCase()}</span>
                             </div>
-                            <div className="text-sm font-medium text-gray-900">{item.name}</div>
+                            <div className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                              {item.name}
+                              {String(item.name||'').trim().toLowerCase()==='boarding fees' && (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 border border-gray-200">System</span>
+                              )}
+                            </div>
                           </div>
                         </td>
                         <td className="px-6 py-4">
@@ -702,7 +711,11 @@ function FeeCategories({ showSuccess, showError, onCount, onLoading }){
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
                           <div className="flex items-center gap-4">
                             <button onClick={() => startEdit(item)} className="text-blue-600 hover:underline font-medium">Edit</button>
-                            <button onClick={() => deleteItem(item)} className="text-red-600 hover:underline font-medium">Delete</button>
+                            {String(item.name||'').trim().toLowerCase()!== 'boarding fees' ? (
+                              <button onClick={() => deleteItem(item)} className="text-red-600 hover:underline font-medium">Delete</button>
+                            ) : (
+                              <span className="text-gray-400 cursor-not-allowed" title="This category cannot be deleted">Delete</span>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -725,7 +738,11 @@ function FeeCategories({ showSuccess, showError, onCount, onLoading }){
                 value={editForm.name}
                 onChange={e=>setEditForm({...editForm, name:e.target.value})}
                 required
+                disabled={String(editItem?.name||'').trim().toLowerCase()==='boarding fees'}
               />
+              {String(editItem?.name||'').trim().toLowerCase()==='boarding fees' && (
+                <div className="mt-1 text-xs text-gray-500">Name is system-protected. You can still edit fees under Assign Class Fees.</div>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
@@ -778,10 +795,13 @@ function ClassFees({ showSuccess, showError, onCount, onLoading }){
         api.get('/academics/classes/'),
         api.get('/finance/fee-categories/'),
       ])
-      setClassFees(cf.data)
-      setClasses(cl.data)
-      setCategories(cats.data)
-      onCount?.(cf.data.length)
+      const cfArr = Array.isArray(cf.data) ? cf.data : (Array.isArray(cf.data?.results) ? cf.data.results : [])
+      const clArr = Array.isArray(cl.data) ? cl.data : (Array.isArray(cl.data?.results) ? cl.data.results : [])
+      const catsArr = Array.isArray(cats.data) ? cats.data : (Array.isArray(cats.data?.results) ? cats.data.results : [])
+      setClassFees(cfArr)
+      setClasses(clArr)
+      setCategories(catsArr)
+      onCount?.(cfArr.length)
     } finally {
       setLoading(false)
       onLoading?.(false)
@@ -1415,8 +1435,9 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
       const query = new URLSearchParams(params).toString()
       const url = '/finance/invoices/arrears/' + (query? `?${query}`:'')
       const { data } = await api.get(url)
-      setItems(data)
-      onCount?.(data.length)
+      const arr = Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : [])
+      setItems(arr)
+      onCount?.(arr.length)
     } finally {
       setLoading(false)
       onLoading?.(false)
@@ -1424,7 +1445,8 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
   }
   useEffect(()=>{ (async()=>{
     const { data } = await api.get('/academics/classes/')
-    setClasses(data)
+    const arr = Array.isArray(data) ? data : (Array.isArray(data?.results) ? data.results : [])
+    setClasses(arr)
     load({})
   })() },[])
 
@@ -1463,7 +1485,7 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
     }
   }
 
-  const totalArrears = useMemo(()=> items.reduce((s, it) => s + (it.balance||0), 0), [items])
+  const totalArrears = useMemo(()=> (Array.isArray(items)?items:[]).reduce((s, it) => s + (it.balance||0), 0), [items])
   const filteredItems = useMemo(()=>{
     const q = query.trim().toLowerCase()
     if (!q) return items
@@ -1506,14 +1528,14 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
               </svg>
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-600">Total Arrears</p>
-              <p className="text-2xl font-bold text-red-600">
+              <div className="text-sm font-medium text-gray-600">Total Arrears</div>
+              <div className="text-2xl font-bold text-red-600">
                 {loading ? (
                   <div className="w-20 h-8 bg-gray-200 rounded animate-pulse"></div>
                 ) : (
                   `KES ${totalArrears.toLocaleString()}`
                 )}
-              </p>
+              </div>
             </div>
           </div>
         </div>
@@ -1526,14 +1548,14 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
               </svg>
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-600">Students with Arrears</p>
-              <p className="text-2xl font-bold text-blue-600">
+              <div className="text-sm font-medium text-gray-600">Students with Arrears</div>
+              <div className="text-2xl font-bold text-blue-600">
                 {loading ? (
                   <div className="w-16 h-8 bg-gray-200 rounded animate-pulse"></div>
                 ) : (
                   items.length
                 )}
-              </p>
+              </div>
             </div>
           </div>
         </div>
@@ -1585,7 +1607,7 @@ function Arrears({ showSuccess, showError, onCount, onLoading }){
               onChange={e=>setKlass(e.target.value)}
             >
               <option value="">All Classes</option>
-              {classes.map(c => (
+              {(Array.isArray(classes)?classes:[]).map(c => (
                 <option key={c.id} value={c.id}>{c.name} - {c.grade_level}</option>
               ))}
             </select>

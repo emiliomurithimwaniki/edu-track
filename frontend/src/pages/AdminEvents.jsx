@@ -303,21 +303,22 @@ export default function AdminEvents(){
             <h1 className="text-2xl font-semibold tracking-tight text-gray-900">School Events</h1>
             <span className="text-xs px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">Modern View</span>
           </div>
-          <div className="flex items-center gap-2 ml-auto">
-            <button onClick={handleAcademicCalendar} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 transition">
+          <div className="flex items-center gap-2 ml-auto w-full sm:w-auto overflow-x-auto -mx-1 px-1">
+            <button onClick={handleAcademicCalendar} className="shrink-0 inline-flex items-center gap-0 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg bg-emerald-600 text-white shadow-sm hover:bg-emerald-700 transition" aria-label="Academic Calendar">
               <span>📆</span><span className="hidden sm:inline">Academic Calendar</span>
             </button>
-            <button onClick={()=>setViewMode(v=> v==='list' ? 'calendar' : 'list')} className="px-3.5 py-2 rounded-lg border bg-white hover:bg-gray-50 shadow-sm">
-              {viewMode==='list' ? 'Calendar View' : 'List View'}
+            <button onClick={()=>setViewMode(v=> v==='list' ? 'calendar' : 'list')} className="shrink-0 px-2.5 sm:px-3.5 py-2 rounded-lg border bg-white hover:bg-gray-50 shadow-sm" aria-label="Toggle View">
+              <span className="sm:hidden">{viewMode==='list' ? '📅' : '📋'}</span>
+              <span className="hidden sm:inline">{viewMode==='list' ? 'Calendar View' : 'List View'}</span>
             </button>
             {viewMode==='calendar' && (
-              <div className="flex items-center gap-2">
+              <div className="shrink-0 flex items-center gap-2">
                 <button className="px-2.5 py-2 rounded-lg border bg-white hover:bg-gray-50 shadow-sm" onClick={()=> setMonth(m=> new Date(m.getFullYear(), m.getMonth()-1, 1))}>Prev</button>
-                <div className="text-sm font-medium w-36 text-center">{month.toLocaleString(undefined, { month: 'long', year: 'numeric'})}</div>
+                <div className="text-sm font-medium w-32 sm:w-36 text-center">{month.toLocaleString(undefined, { month: 'long', year: 'numeric'})}</div>
                 <button className="px-2.5 py-2 rounded-lg border bg-white hover:bg-gray-50 shadow-sm" onClick={()=> setMonth(m=> new Date(m.getFullYear(), m.getMonth()+1, 1))}>Next</button>
               </div>
             )}
-            <button onClick={()=>setIsCreateOpen(true)} className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg bg-indigo-600 text-white shadow-sm hover:bg-indigo-700">
+            <button onClick={()=>setIsCreateOpen(true)} className="shrink-0 inline-flex items-center gap-0 sm:gap-2 px-2.5 sm:px-3.5 py-2 rounded-lg bg-indigo-600 text-white shadow-sm hover:bg-indigo-700" aria-label="Create Event">
               <span>＋</span><span className="hidden sm:inline">Create Event</span>
             </button>
           </div>
@@ -381,17 +382,17 @@ export default function AdminEvents(){
                       {ev.location && <div className="text-xs text-gray-600 truncate">📍 {ev.location}</div>}
                       {ev.description && <div className="text-xs text-gray-600 truncate">{ev.description}</div>}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">{ev.source==='exam' ? 'exam' : ev.audience}</span>
-                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">{ev.visibility}</span>
-                      {isExpired(ev) && <span className="text-[11px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">Expired</span>}
-                      {ev.completed && <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done</span>}
+                    <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap overflow-x-auto sm:overflow-visible -mx-1 px-1">
+                      <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">{ev.source==='exam' ? 'exam' : ev.audience}</span>
+                      <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full bg-gray-50 text-gray-700 border border-gray-200">{ev.visibility}</span>
+                      {isExpired(ev) && <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200">Expired</span>}
+                      {ev.completed && <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">Done</span>}
                       {!isExpired(ev) && countdownLabel(ev.start) && (
-                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-800 border border-blue-200">{countdownLabel(ev.start)}</span>
+                        <span className="shrink-0 text-[11px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-800 border border-blue-200">{countdownLabel(ev.start)}</span>
                       )}
-                      <button onClick={()=>openComplete(ev)} className="text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-gray-50 shadow-sm">{ev.completed ? 'Update Status' : 'Mark Done'}</button>
-                      <button onClick={()=>openEdit(ev)} className="text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-blue-50 text-blue-700 border-blue-200">Edit</button>
-                      <button onClick={()=>remove(ev.id)} className="text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-rose-50 text-rose-700 border-rose-200">Delete</button>
+                      <button onClick={()=>openComplete(ev)} className="shrink-0 text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-gray-50 shadow-sm">{ev.completed ? 'Update Status' : 'Mark Done'}</button>
+                      <button onClick={()=>openEdit(ev)} className="shrink-0 text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-blue-50 text-blue-700 border-blue-200">Edit</button>
+                      <button onClick={()=>remove(ev.id)} className="shrink-0 text-sm px-3 py-1.5 rounded-lg border bg-white hover:bg-rose-50 text-rose-700 border-rose-200">Delete</button>
                     </div>
                   </div>
                 ))}

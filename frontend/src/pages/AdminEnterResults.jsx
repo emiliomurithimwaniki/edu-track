@@ -37,9 +37,10 @@ export default function AdminEnterResults(){
         setKlass(klassRes.data)
         const subj = Array.isArray(klassRes.data?.subjects) ? klassRes.data.subjects : []
         setSubjects(subj)
-        const stu = await api.get(`/academics/students/?klass=${e.data.klass}`)
+        const stuRes = await api.get(`/academics/students/?klass=${e.data.klass}`)
         if (!alive) return
-        setStudents(stu.data || [])
+        const studentsList = Array.isArray(stuRes.data) ? stuRes.data : (Array.isArray(stuRes.data?.results) ? stuRes.data.results : [])
+        setStudents(studentsList)
         // existing results
         let existing = []
         try{
@@ -49,7 +50,7 @@ export default function AdminEnterResults(){
         const existingMap = new Map()
         existing.forEach(r=> existingMap.set(`${r.student}-${r.subject}`, r.marks))
         const rows = []
-        for (const s of (stu.data||[])){
+        for (const s of studentsList){
           for (const sub of subj){
             const key = `${s.id}-${sub.id}`
             rows.push({ student: s.id, subject: sub.id, marks: existingMap.has(key) ? existingMap.get(key) : '' })

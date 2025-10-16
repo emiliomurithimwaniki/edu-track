@@ -27,7 +27,10 @@ export default function AdminSubjects(){
         api.get('/academics/classes/'),
         api.get('/academics/teachers/')
       ])
-      setSubjects(s.data); setClasses(c.data); setTeachers(t.data)
+      const sArr = Array.isArray(s.data) ? s.data : (Array.isArray(s.data?.results) ? s.data.results : [])
+      const cArr = Array.isArray(c.data) ? c.data : (Array.isArray(c.data?.results) ? c.data.results : [])
+      const tArr = Array.isArray(t.data) ? t.data : (Array.isArray(t.data?.results) ? t.data.results : [])
+      setSubjects(sArr); setClasses(cArr); setTeachers(tArr)
     } catch (e) {
       showError('Failed to Load Data', 'Could not load subjects/classes/teachers')
     } finally {

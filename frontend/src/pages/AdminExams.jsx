@@ -14,7 +14,7 @@ export default function AdminExams(){
 
   const [showCreateExam, setShowCreateExam] = useState(false)
   const [showEnterResults, setShowEnterResults] = useState(false)
-  const [examForm, setExamForm] = useState({ name:'Mid Term', year:new Date().getFullYear(), term:1, classes:[], date:new Date().toISOString().slice(0,10), total_marks:100 })
+  const [examForm, setExamForm] = useState({ name:'Mid Term', year:new Date().getFullYear(), term:1, grades:[], classes:[], mode:'grade', date:new Date().toISOString().slice(0,10), total_marks:100 })
   const [selectedExam, setSelectedExam] = useState(null)
   const [results, setResults] = useState([]) // [{student, subject, marks}]
   const [status, setStatus] = useState('idle') // idle|saving|saved
@@ -24,6 +24,10 @@ export default function AdminExams(){
   const [publishingId, setPublishingId] = useState(null)
   const [banner, setBanner] = useState('')
   const [currentTerm, setCurrentTerm] = useState(null)
+  // Bulk selection
+  const [selected, setSelected] = useState(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [bulkPublishing, setBulkPublishing] = useState(false)
   // Group by exam name modal
   const [groupedOpen, setGroupedOpen] = useState(false)
   const [groupedName, setGroupedName] = useState('')
@@ -47,7 +51,7 @@ export default function AdminExams(){
   const buildMonthGrid = (d) => { const start = startOfCalendarGrid(d); const days=[]; for(let i=0;i<42;i++){ const day=new Date(start); day.setDate(start.getDate()+i); day.setHours(0,0,0,0); days.push(day) } return days }
   const localKey = (dt) => { const d = new Date(dt); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` }
   const monthDays = buildMonthGrid(calMonth)
-  const examsByDate = (exams||[]).reduce((m,e)=>{ const key = (e.date||'').slice(0,10); if(!key) return m; if(!m[key]) m[key]=[]; m[key].push(e); return m },{})
+  const examsByDate = (Array.isArray(exams) ? exams : []).reduce((m,e)=>{ const key = (e.date||'').slice(0,10); if(!key) return m; if(!m[key]) m[key]=[]; m[key].push(e); return m },{})
   const [dayOpen, setDayOpen] = useState(false)
   const [dayKey, setDayKey] = useState('')
   const [dayItems, setDayItems] = useState([])
@@ -55,6 +59,25 @@ export default function AdminExams(){
   // Navigate to CBC Competencies (Curriculum) page
   const handleCBCCompetencies = () => {
     navigate('/admin/curriculum')
+  }
+
+  const bulkPublishExams = async () => {
+    const ids = Array.from(selected)
+    if (ids.length===0) return
+    if (!window.confirm(`Publish results for ${ids.length} selected exam(s)?`)) return
+    try{
+      setBulkPublishing(true)
+      const results = await Promise.allSettled(ids.map(id => api.post(`/academics/exams/${id}/publish/`)))
+      const ok = results.filter(r=>r.status==='fulfilled').length
+      const fail = results.length - ok
+      setBanner(`Published ${ok} exam(s)${fail? `, ${fail} failed`:''}`)
+    }catch(err){
+      setBanner(err?.response?.data?.detail || 'Bulk publish failed')
+    }finally{
+      setBulkPublishing(false)
+      setSelected(new Set())
+      load()
+    }
   }
 
   // Open modal showing all classes/grades that share the same exam name
@@ -95,9 +118,12 @@ export default function AdminExams(){
       api.get('/academics/subjects/'),
       api.get('/academics/terms/current/').catch(()=>({ data: null })),
     ])
-    setExams(ex.data)
-    setClasses(cl.data)
-    setSubjects(sbj.data)
+    const exArr = Array.isArray(ex.data) ? ex.data : (Array.isArray(ex.data?.results) ? ex.data.results : [])
+    const clArr = Array.isArray(cl.data) ? cl.data : (Array.isArray(cl.data?.results) ? cl.data.results : [])
+    const sbjArr = Array.isArray(sbj.data) ? sbj.data : (Array.isArray(sbj.data?.results) ? sbj.data.results : [])
+    setExams(exArr)
+    setClasses(clArr)
+    setSubjects(sbjArr)
     setCurrentTerm(term?.data || null)
     // Set defaults for modal: current term and today's date
     setExamForm(prev => ({
@@ -109,11 +135,11 @@ export default function AdminExams(){
   useEffect(()=>{ load() }, [])
 
   // Derive grade options from classes
-  const gradeOptions = Array.from(new Set((classes||[]).map(c=>c.grade_level))).filter(Boolean)
+  const gradeOptions = Array.from(new Set((Array.isArray(classes)?classes:[]).map(c=>c.grade_level))).filter(Boolean)
 
   // Compute filtered list
-  const filteredExams = exams.filter(e => {
-    const klass = classes.find(c=>c.id===e.klass)
+  const filteredExams = (Array.isArray(exams)?exams:[]).filter(e => {
+    const klass = (Array.isArray(classes)?classes:[]).find(c=>c.id===e.klass)
     const className = klass?.name || ''
     const gradeLevel = klass?.grade_level || ''
     // search
@@ -128,10 +154,51 @@ export default function AdminExams(){
     return matchesSearch && matchesGrade && matchesClass && matchesStatus
   })
 
+  // Selection helpers
+  const allFilteredIds = filteredExams.map(e=>e.id)
+  const allSelected = allFilteredIds.length>0 && allFilteredIds.every(id=>selected.has(id))
+  const toggleSelect = (id) => {
+    setSelected(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
+    })
+  }
+  const toggleSelectAll = () => {
+    setSelected(prev => {
+      const n = new Set(prev)
+      const shouldSelect = !allSelected
+      for (const id of allFilteredIds){
+        if (shouldSelect) n.add(id); else n.delete(id)
+      }
+      return n
+    })
+  }
+
+  const bulkDeleteExams = async () => {
+    const ids = Array.from(selected)
+    if (ids.length===0) return
+    if (!window.confirm(`Delete ${ids.length} selected exam(s)? This cannot be undone.`)) return
+    try{
+      setBulkDeleting(true)
+      const results = await Promise.allSettled(ids.map(id => api.delete(`/academics/exams/${id}/`)))
+      const ok = results.filter(r=>r.status==='fulfilled').length
+      const fail = results.length - ok
+      setBanner(`Deleted ${ok} exam(s)${fail? `, ${fail} failed`:''}`)
+    }catch(err){
+      setBanner(err?.response?.data?.detail || 'Bulk delete failed')
+    }finally{
+      setBulkDeleting(false)
+      setSelected(new Set())
+      load()
+    }
+  }
+
   const openResults = async (exam) => {
     setSelectedExam(exam)
     const st = await api.get(`/academics/students/?klass=${exam.klass}`)
-    setStudents(st.data)
+    const stArr = Array.isArray(st.data) ? st.data : (Array.isArray(st.data?.results) ? st.data.results : [])
+    setStudents(stArr)
     // initialize results grid: each student x each subject in class subjects
     const klass = classes.find(c => c.id === exam.klass)
     // Only include examinable subjects
@@ -149,7 +216,7 @@ export default function AdminExams(){
       existingMap.set(`${r.student}-${r.subject}`, r.marks)
     })
     const rows = []
-    for (const s of st.data) {
+    for (const s of stArr) {
       for (const sid of subjectIds) {
         const key = `${s.id}-${sid}`
         rows.push({ student: s.id, subject: sid, marks: existingMap.has(key) ? existingMap.get(key) : '' })
@@ -222,15 +289,41 @@ export default function AdminExams(){
   const createExam = async (e) => {
     e.preventDefault()
     setError('')
-    // default term to current if available
-    const base = { name: examForm.name, year: Number(examForm.year), term: Number(examForm.term || currentTerm?.number || 1), date: examForm.date, total_marks: Number(examForm.total_marks) || 100 }
-    const targets = (examForm.classes || []).map(Number).filter(Boolean)
-    if (targets.length === 0) return setError('Select at least one class')
-    for (const klass of targets){
-      await api.post('/academics/exams/', { ...base, klass })
+    const termVal = Number(examForm.term || currentTerm?.number || 1)
+    const nameStr = String(examForm.name || '').trim()
+    if (!nameStr) return setError('Provide a valid exam name')
+
+    if (examForm.mode === 'classes'){
+      const targets = (examForm.classes || []).map(Number).filter(Boolean)
+      if (targets.length === 0) return setError('Select at least one class')
+      for (const klass of targets){
+        await api.post('/academics/exams/', {
+          name: nameStr,
+          term: termVal,
+          year: Number(examForm.year),
+          total_marks: Number(examForm.total_marks) || 100,
+          date: examForm.date,
+          klass,
+        })
+      }
+    } else {
+      const grades = Array.isArray(examForm.grades) ? examForm.grades.filter(Boolean) : []
+      if (grades.length === 0) return setError('Select at least one grade')
+      for (const g of grades){
+        const payload = {
+          names: [nameStr],
+          term: termVal,
+          year: Number(examForm.year),
+          total_marks: Number(examForm.total_marks) || 100,
+          date: examForm.date,
+          grade: String(g).trim(),
+          publish: false,
+        }
+        await api.post('/academics/exams/common-bulk-create/', payload)
+      }
     }
     setShowCreateExam(false)
-    setExamForm({ name:'Mid Term', year:new Date().getFullYear(), term:(currentTerm?.number || 1), classes:[], date:'', total_marks:100 })
+    setExamForm({ name:'Mid Term', year:new Date().getFullYear(), term:(currentTerm?.number || 1), grades:[], classes:[], mode:'grade', date:'', total_marks:100 })
     load()
   }
 
@@ -262,18 +355,30 @@ export default function AdminExams(){
 
         <div className="bg-white rounded-xl shadow-card border border-gray-200 p-4 flex flex-wrap items-center justify-between gap-3">
           <div className="font-medium text-gray-800">Manage Exams</div>
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <button onClick={handleCBCCompetencies} className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-purple-600 text-white px-3.5 py-2 rounded-lg hover:bg-purple-700 transition-colors">
+          <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto -mx-1 px-1">
+            <button
+              onClick={handleCBCCompetencies}
+              className="shrink-0 flex-1 sm:flex-none inline-flex items-center justify-center gap-0 sm:gap-2 bg-purple-600 text-white px-2.5 sm:px-3.5 py-2 rounded-lg hover:bg-purple-700 transition-colors"
+              aria-label="CBC Competencies"
+            >
               <span>📚</span>
-              <span className="text-sm font-semibold">CBC Competencies</span>
+              <span className="hidden sm:inline text-sm font-semibold">CBC Competencies</span>
             </button>
-            <button onClick={()=>setShowCalendar(true)} className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-gray-800 text-white px-3.5 py-2 rounded-lg hover:bg-gray-900">
+            <button
+              onClick={()=>setShowCalendar(true)}
+              className="shrink-0 flex-1 sm:flex-none inline-flex items-center justify-center gap-0 sm:gap-2 bg-gray-800 text-white px-2.5 sm:px-3.5 py-2 rounded-lg hover:bg-gray-900"
+              aria-label="View Calendar"
+            >
               <span>📅</span>
-              <span className="text-sm font-semibold">View Calendar</span>
+              <span className="hidden sm:inline text-sm font-semibold">View Calendar</span>
             </button>
-            <button onClick={()=>setShowCreateExam(true)} className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 bg-blue-600 text-white px-3.5 py-2 rounded-lg hover:bg-blue-700">
+            <button
+              onClick={()=>setShowCreateExam(true)}
+              className="shrink-0 flex-1 sm:flex-none inline-flex items-center justify-center gap-0 sm:gap-2 bg-blue-600 text-white px-2.5 sm:px-3.5 py-2 rounded-lg hover:bg-blue-700"
+              aria-label="Create Exam"
+            >
               <span>➕</span>
-              <span className="text-sm font-semibold">Create Exam</span>
+              <span className="hidden sm:inline text-sm font-semibold">Create Exam</span>
             </button>
           </div>
         </div>
@@ -289,7 +394,7 @@ export default function AdminExams(){
               <span className="text-xs text-gray-600">Search</span>
               <div className="relative">
                 <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M10.5 18a7.5 7.5 0 100-15 7.5 7.5 0 000 15z"/></svg>
-                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, class, year" className="border pl-9 pr-9 py-2 rounded-lg w-full shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500" />
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name, class, year" className="border pl-9 pr-9 py-2 rounded-lg w-full shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white placeholder-gray-400" />
                 {search && (
                   <button type="button" onClick={()=>setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-gray-500 hover:bg-gray-100" aria-label="Clear search">
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6l-12 12"/></svg>
@@ -299,21 +404,21 @@ export default function AdminExams(){
             </label>
             <label className="grid gap-1">
               <span className="text-xs text-gray-600">Grade</span>
-              <select value={filterGrade} onChange={e=>setFilterGrade(e.target.value)} className="border p-2 rounded w-full">
+              <select value={filterGrade} onChange={e=>setFilterGrade(e.target.value)} className="border p-2 rounded w-full bg-white">
                 <option value="">All Grades</option>
                 {gradeOptions.map(g => <option key={g} value={g}>{g}</option>)}
               </select>
             </label>
             <label className="grid gap-1">
               <span className="text-xs text-gray-600">Class</span>
-              <select value={filterClass} onChange={e=>setFilterClass(e.target.value)} className="border p-2 rounded w-full">
+              <select value={filterClass} onChange={e=>setFilterClass(e.target.value)} className="border p-2 rounded w-full bg-white">
                 <option value="">All Classes</option>
                 {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </label>
             <label className="grid gap-1">
               <span className="text-xs text-gray-600">Status</span>
-              <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="border p-2 rounded w-full">
+              <select value={filterStatus} onChange={e=>setFilterStatus(e.target.value)} className="border p-2 rounded w-full bg-white">
                 <option value="all">All</option>
                 <option value="published">Published</option>
                 <option value="unpublished">Unpublished</option>
@@ -321,6 +426,13 @@ export default function AdminExams(){
             </label>
             <div className="flex items-end">
               <button onClick={()=>{setSearch('');setFilterGrade('');setFilterClass('');setFilterStatus('all')}} className="w-full border px-3 py-2 rounded">Clear</button>
+            </div>
+          </div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-sm text-gray-600">Selected: {selected.size}</div>
+            <div className="flex items-center gap-2">
+              <button onClick={bulkPublishExams} disabled={selected.size===0 || bulkPublishing} className={`px-3 py-2 rounded ${selected.size===0? 'border text-gray-400' : 'bg-purple-600 text-white'}`}>{bulkPublishing? 'Publishing...' : 'Publish Selected'}</button>
+              <button onClick={bulkDeleteExams} disabled={selected.size===0 || bulkDeleting} className={`px-3 py-2 rounded ${selected.size===0? 'border text-gray-400' : 'bg-red-600 text-white'}`}>{bulkDeleting? 'Deleting...' : 'Delete Selected'}</button>
             </div>
           </div>
 
@@ -352,12 +464,14 @@ export default function AdminExams(){
             <table className="w-full text-left text-sm">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="px-3 py-2 w-10"><input type="checkbox" checked={allSelected} onChange={toggleSelectAll} aria-label="Select all" /></th>
                   <th className="px-3 py-2">Name</th><th className="px-3 py-2">Year</th><th className="px-3 py-2">Term</th><th className="px-3 py-2">Class</th><th className="px-3 py-2">Date</th><th className="px-3 py-2">Total</th><th className="px-3 py-2">Status</th><th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody>
                 {filteredExams.map(e => (
                   <tr key={e.id} className="border-t">
+                    <td className="px-3 py-2"><input type="checkbox" checked={selected.has(e.id)} onChange={()=>toggleSelect(e.id)} aria-label={`Select exam ${e.name}`} /></td>
                     <td className="px-3 py-2">
                       <button onClick={()=>openByName(e.name)} className="text-blue-700 hover:underline" title="Show all classes for this exam name">{e.name}</button>
                     </td>
@@ -388,26 +502,44 @@ export default function AdminExams(){
 
       {/* Create Exam Modal */}
       <Modal open={showCreateExam} onClose={()=>setShowCreateExam(false)} title="Create Exam" size="md">
-        <form onSubmit={createExam} className="grid gap-3 md:grid-cols-3">
-          <input className="border p-2 rounded" placeholder="Name (e.g., Mid Term)" value={examForm.name} onChange={e=>setExamForm({...examForm, name:e.target.value})} required />
-          <input className="border p-2 rounded" type="number" placeholder="Year" value={examForm.year} onChange={e=>setExamForm({...examForm, year:e.target.value})} required />
-          <select className="border p-2 rounded" value={examForm.term} onChange={e=>setExamForm({...examForm, term:Number(e.target.value)})}>
-            <option value={1}>Term 1</option>
-            <option value={2}>Term 2</option>
-            <option value={3}>Term 3</option>
-          </select>
-          {/* Multi-class select */}
-          <select className="border p-2 rounded md:col-span-2" multiple value={examForm.classes} onChange={e=>{
-            const opts = Array.from(e.target.selectedOptions).map(o=>o.value)
-            setExamForm({...examForm, classes: opts})
-          }} required>
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name} - {c.grade_level}</option>)}
-          </select>
-          <input className="border p-2 rounded" type="date" value={examForm.date} onChange={e=>setExamForm({...examForm, date:e.target.value})} required />
-          {/* Removed total marks input, defaulting to 100 internally */}
-          <div className="md:col-span-3 flex justify-end gap-2 mt-2">
-            <button type="button" onClick={()=>setShowCreateExam(false)} className="px-4 py-2 rounded border">Cancel</button>
-            <button className="bg-blue-600 text-white px-4 py-2 rounded">Create</button>
+        <form onSubmit={createExam} className="grid gap-3">
+          <div className="grid gap-3 md:grid-cols-3">
+            <input className="border p-2 rounded bg-white placeholder-gray-400" placeholder="Name (e.g., Mid Term)" value={examForm.name} onChange={e=>setExamForm({...examForm, name:e.target.value})} required />
+            <input className="border p-2 rounded bg-white placeholder-gray-400" type="number" placeholder="Year" value={examForm.year} onChange={e=>setExamForm({...examForm, year:e.target.value})} required />
+            <select className="border p-2 rounded bg-white" value={examForm.term} onChange={e=>setExamForm({...examForm, term:Number(e.target.value)})}>
+              <option value={1}>Term 1</option>
+              <option value={2}>Term 2</option>
+              <option value={3}>Term 3</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={()=>setExamForm(prev=>({...prev, mode:'grade'}))} className={`px-3 py-1.5 rounded border ${examForm.mode==='grade'?'bg-blue-50 border-blue-300 text-blue-700':'bg-white'}`}>By Grade</button>
+            <button type="button" onClick={()=>setExamForm(prev=>({...prev, mode:'classes'}))} className={`px-3 py-1.5 rounded border ${examForm.mode==='classes'?'bg-blue-50 border-blue-300 text-blue-700':'bg-white'}`}>By Classes</button>
+          </div>
+          {examForm.mode==='grade' ? (
+            <div className="grid gap-3 md:grid-cols-3">
+              <select className="border p-2 rounded md:col-span-2 bg-white" multiple value={examForm.grades} onChange={e=>{
+                const opts = Array.from(e.target.selectedOptions).map(o=>o.value)
+                setExamForm({...examForm, grades: opts})
+              }}>
+                {gradeOptions.map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+              <input className="border p-2 rounded bg-white" type="date" value={examForm.date} onChange={e=>setExamForm({...examForm, date:e.target.value})} required />
+            </div>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-3">
+              <select className="border p-2 rounded md:col-span-2 bg-white" multiple value={examForm.classes} onChange={e=>{
+                const opts = Array.from(e.target.selectedOptions).map(o=>o.value)
+                setExamForm({...examForm, classes: opts})
+              }} required>
+                {classes.map(c => <option key={c.id} value={c.id}>{c.name} — {c.grade_level}</option>)}
+              </select>
+              <input className="border p-2 rounded bg-white" type="date" value={examForm.date} onChange={e=>setExamForm({...examForm, date:e.target.value})} required />
+            </div>
+          )}
+          <div className="flex justify-end gap-2 mt-1">
+            <button type="button" onClick={()=>setShowCreateExam(false)} className="px-4 py-2 rounded border bg-white">Cancel</button>
+            <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow">Create</button>
           </div>
         </form>
       </Modal>
@@ -418,17 +550,17 @@ export default function AdminExams(){
           {error && (
             <div className="md:col-span-3 bg-red-50 text-red-700 text-sm p-2 rounded">{typeof error === 'string' ? error : JSON.stringify(error)}</div>
           )}
-          <input className="border p-2 rounded" placeholder="Name (e.g., Opener)" value={editForm.name} onChange={e=>setEditForm({...editForm, name:e.target.value})} required />
-          <input className="border p-2 rounded" type="number" placeholder="Year" value={editForm.year} onChange={e=>setEditForm({...editForm, year:e.target.value})} required />
-          <select className="border p-2 rounded" value={editForm.term} onChange={e=>setEditForm({...editForm, term:Number(e.target.value)})}>
+          <input className="border p-2 rounded bg-white placeholder-gray-400" placeholder="Name (e.g., Opener)" value={editForm.name} onChange={e=>setEditForm({...editForm, name:e.target.value})} required />
+          <input className="border p-2 rounded bg-white placeholder-gray-400" type="number" placeholder="Year" value={editForm.year} onChange={e=>setEditForm({...editForm, year:e.target.value})} required />
+          <select className="border p-2 rounded bg-white" value={editForm.term} onChange={e=>setEditForm({...editForm, term:Number(e.target.value)})}>
             <option value={1}>Term 1</option>
             <option value={2}>Term 2</option>
             <option value={3}>Term 3</option>
           </select>
-          <select className="border p-2 rounded md:col-span-2" value={editForm.klass} onChange={e=>setEditForm({...editForm, klass:e.target.value})}>
+          <select className="border p-2 rounded md:col-span-2 bg-white" value={editForm.klass} onChange={e=>setEditForm({...editForm, klass:e.target.value})}>
             {classes.map(c => <option key={c.id} value={c.id}>{c.name} - {c.grade_level}</option>)}
           </select>
-          <input className="border p-2 rounded" type="date" value={editForm.date} onChange={e=>setEditForm({...editForm, date:e.target.value})} required />
+          <input className="border p-2 rounded bg-white" type="date" value={editForm.date} onChange={e=>setEditForm({...editForm, date:e.target.value})} required />
           <input className="border p-2 rounded" type="number" min={1} value={editForm.total_marks} onChange={e=>setEditForm({...editForm, total_marks:e.target.value})} />
           <div className="md:col-span-3 flex justify-end gap-2 mt-2">
             <button type="button" onClick={()=>setShowEditExam(false)} className="px-4 py-2 rounded border">Cancel</button>
@@ -460,7 +592,7 @@ export default function AdminExams(){
                       const val = idx>-1 ? results[idx].marks : ''
                       return (
                         <td key={s.id} className="border px-2 py-1">
-                          <input className="border p-1 rounded w-20" value={val} onChange={e=>{
+                          <input className="border p-1 rounded w-20 bg-white" value={val} onChange={e=>{
                             const v = e.target.value
                             setResults(prev => {
                               const copy = [...prev]

@@ -3,6 +3,7 @@ import api from '../api'
 
 export default function TeacherProfile(){
   const [me, setMe] = useState(null)
+  const [teacherProfile, setTeacherProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [pw, setPw] = useState({ old_password: '', new_password: '' })
@@ -22,17 +23,21 @@ export default function TeacherProfile(){
     ;(async ()=>{
       try{
         setLoading(true)
-        const res = await api.get('/auth/me/')
+        const [meRes, tpRes] = await Promise.all([
+          api.get('/auth/me/'),
+          api.get('/academics/teachers/mine/').catch(()=>({ data: null }))
+        ])
         if (!mounted) return
-        setMe(res.data)
+        setMe(meRes.data)
+        setTeacherProfile(tpRes?.data || null)
         setForm({
-          first_name: res.data?.first_name || '',
-          last_name: res.data?.last_name || '',
-          email: res.data?.email || '',
-          phone: res.data?.phone || res.data?.mobile || res.data?.telephone || res.data?.profile?.phone || '',
+          first_name: meRes.data?.first_name || '',
+          last_name: meRes.data?.last_name || '',
+          email: meRes.data?.email || '',
+          phone: meRes.data?.phone || meRes.data?.mobile || meRes.data?.telephone || meRes.data?.profile?.phone || '',
         })
         // Set avatar preview if backend provides any common url field
-        const avatarUrl = res.data?.avatar_url || res.data?.photo_url || res.data?.profile_picture_url || res.data?.profile?.avatar_url || ''
+        const avatarUrl = meRes.data?.avatar_url || meRes.data?.photo_url || meRes.data?.profile_picture_url || meRes.data?.profile?.avatar_url || ''
         if (avatarUrl) setAvatarPreview(avatarUrl)
       }catch(e){ setError(e?.response?.data?.detail || e?.message) }
       finally{ if(mounted) setLoading(false) }

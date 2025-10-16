@@ -8,7 +8,7 @@ import { useNotification } from '../components/NotificationContext'
 export default function AdminStudents(){
   const [students, setStudents] = useState([])
   const [classes, setClasses] = useState([])
-  const [form, setForm] = useState({ admission_no:'', upi_number:'', name:'', dob:'', gender:'', guardian_id:'', klass:'' })
+  const [form, setForm] = useState({ admission_no:'', upi_number:'', name:'', dob:'', gender:'', guardian_id:'', guardian_name:'', guardian_passport_no:'', birth_certificate_no:'', klass:'', boarding_status:'day' })
   const [showAddStudent, setShowAddStudent] = useState(false)
   const [addStatus, setAddStatus] = useState('idle') // idle | adding | completed
   const [addError, setAddError] = useState('')
@@ -33,8 +33,10 @@ export default function AdminStudents(){
         api.get(`/academics/students/?is_graduated=${tab === 'graduated' ? 'true' : 'false'}`),
         api.get('/academics/classes/')
       ])
-      setStudents(st.data)
-      setClasses(cl.data)
+      const stData = Array.isArray(st.data) ? st.data : (Array.isArray(st.data?.results) ? st.data.results : [])
+      const clData = Array.isArray(cl.data) ? cl.data : (Array.isArray(cl.data?.results) ? cl.data.results : [])
+      setStudents(stData)
+      setClasses(clData)
     } catch (e) {
       showError('Load Failed', 'Could not load students or classes.')
     } finally {
@@ -85,7 +87,7 @@ export default function AdminStudents(){
       await api.post('/academics/students/', studentPayload)
 
       // Clear form and mark completed
-      setForm({ admission_no:'', upi_number:'', name:'', dob:'', gender:'', guardian_id:'', klass:'' })
+      setForm({ admission_no:'', upi_number:'', name:'', dob:'', gender:'', guardian_id:'', guardian_name:'', guardian_passport_no:'', birth_certificate_no:'', klass:'', boarding_status:'day' })
       setAddStatus('completed')
 
       // Revert button text after a short delay so user can add another or close
@@ -103,10 +105,10 @@ export default function AdminStudents(){
 
   // Options for grade filter derived from classes
   const gradeOptions = Array.from(new Set(
-    classes.map(c => String(c?.grade_level ?? c?.grade)).filter(Boolean)
+    (Array.isArray(classes) ? classes : []).map(c => String(c?.grade_level ?? c?.grade)).filter(Boolean)
   )).sort((a,b)=>a.localeCompare(b))
 
-  const classOptions = classes.filter(c => !filterGrade || String(c.grade_level) === String(filterGrade))
+  const classOptions = (Array.isArray(classes) ? classes : []).filter(c => !filterGrade || String(c.grade_level) === String(filterGrade))
 
   // Filter students based on search term and selected filters
   const filteredStudents = students.filter(student => {
@@ -616,6 +618,18 @@ export default function AdminStudents(){
               </select>
             </div>
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Boarding Status *</label>
+              <select
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                value={form.boarding_status}
+                onChange={e=>setForm({...form, boarding_status:e.target.value})}
+                required
+              >
+                <option value="day">Day</option>
+                <option value="boarding">Boarding</option>
+              </select>
+            </div>
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Guardian Phone Number *</label>
               <input
                 className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -636,6 +650,33 @@ export default function AdminStudents(){
                 <option value="">Select Class (Optional)</option>
                 {classes.map(c=> <option key={c.id} value={c.id}>{c.name} - {c.grade_level}</option>)}
               </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Parent/Guardian Name</label>
+              <input
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Enter parent/guardian full name"
+                value={form.guardian_name}
+                onChange={e=>setForm({...form, guardian_name:e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Parent/Guardian Passport Number</label>
+              <input
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Enter passport number (if applicable)"
+                value={form.guardian_passport_no}
+                onChange={e=>setForm({...form, guardian_passport_no:e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Student Birth Certificate Number</label>
+              <input
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Enter birth certificate number"
+                value={form.birth_certificate_no}
+                onChange={e=>setForm({...form, birth_certificate_no:e.target.value})}
+              />
             </div>
           </div>
 

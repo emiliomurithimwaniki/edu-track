@@ -103,26 +103,36 @@ export default function AdminReports(){
     <AdminLayout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-800">School-wide Reports</h1>
-          <div className="space-x-2">
-            <button onClick={() => load(true)} className="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg transition">
-              🔄 Refresh
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-800">School-wide Reports</h1>
+          <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto -mx-1 px-1">
+            <button
+              onClick={() => load(true)}
+              className="shrink-0 inline-flex items-center justify-center gap-0 sm:gap-2 bg-gray-100 hover:bg-gray-200 px-2.5 sm:px-4 py-2 rounded-lg transition"
+              aria-label="Refresh"
+            >
+              <span>🔄</span>
+              <span className="hidden sm:inline">Refresh</span>
             </button>
-            <button onClick={exportCSV} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition">
-              📥 Export CSV
+            <button
+              onClick={exportCSV}
+              className="shrink-0 inline-flex items-center justify-center gap-0 sm:gap-2 bg-blue-600 hover:bg-blue-700 text-white px-2.5 sm:px-4 py-2 rounded-lg transition"
+              aria-label="Export CSV"
+            >
+              <span>📥</span>
+              <span className="hidden sm:inline">Export CSV</span>
             </button>
           </div>
         </div>
 
         {/* Tabs */}
         <div className="border-b border-gray-200">
-          <div className="flex space-x-8">
+          <div className="flex gap-6 overflow-x-auto -mx-2 px-2">
             {['overview', 'finance', 'academic', 'administrative'].map(tab => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
-                className={`pb-3 px-1 border-b-2 font-medium text-sm transition ${
+                className={`shrink-0 pb-3 px-1 border-b-2 font-medium text-sm transition ${
                   activeTab === tab
                     ? 'border-blue-600 text-blue-600'
                     : 'border-transparent text-gray-500 hover:text-gray-700'

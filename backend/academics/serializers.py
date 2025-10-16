@@ -74,9 +74,9 @@ class StudentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Student
         fields = [
-            'id','admission_no','name','dob','gender','upi_number','guardian_id','klass','klass_detail','user','user_id',
+            'id','admission_no','name','dob','gender','upi_number','guardian_id','guardian_name','guardian_passport_no','birth_certificate_no','klass','klass_detail','user','user_id',
             'passport_no','phone','email','address','photo','photo_url',
-            'is_graduated','graduation_year'
+            'is_graduated','graduation_year','boarding_status'
         ]
 
     def get_photo_url(self, obj):
@@ -98,8 +98,8 @@ class StudentListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Student
         fields = [
-            'id','admission_no','name','dob','gender','upi_number','guardian_id','klass','klass_detail','photo','photo_url',
-            'is_graduated','graduation_year'
+            'id','admission_no','name','dob','gender','upi_number','guardian_id','guardian_name','guardian_passport_no','birth_certificate_no','klass','klass_detail','photo','photo_url',
+            'is_graduated','graduation_year','boarding_status'
         ]
 
     def get_photo_url(self, obj):
@@ -242,7 +242,7 @@ class TeacherProfileSerializer(serializers.ModelSerializer):
     can_manage_timetable = serializers.BooleanField(required=False)
     class Meta:
         model = TeacherProfile
-        fields = ['id','user','user_id','subjects','klass','klass_detail','can_manage_timetable']
+        fields = ['id','user','user_id','subjects','klass','klass_detail','can_manage_timetable','tsc_number']
 
 
 class ExamSerializer(serializers.ModelSerializer):

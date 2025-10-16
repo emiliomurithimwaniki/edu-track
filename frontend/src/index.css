@@ -30,3 +30,61 @@ body { @apply text-gray-800; }
   .shadow-card { box-shadow: 0 10px 20px -10px rgba(0,0,0,0.12), 0 4px 8px -4px rgba(0,0,0,0.10); }
   .shadow-elevated { box-shadow: 0 20px 40px -20px rgba(0,0,0,0.18), 0 8px 16px -8px rgba(0,0,0,0.14); }
 }
+
+:root { color-scheme: light; }
+
+@layer base {
+  body, form, input, textarea, select, button { color-scheme: light; }
+  input, textarea, select, button {
+    forced-color-adjust: none;
+    background-color: #ffffff;
+    color: #111827;
+    border-color: #d1d5db;
+  }
+  input::placeholder, textarea::placeholder { color: #9ca3af; opacity: 1; }
+  input:focus, textarea:focus, select:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.25);
+    border-color: #6366f1;
+    background-color: #ffffff;
+  }
+  select { background-color: #ffffff; }
+}
+
+input:-webkit-autofill,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0px 1000px #ffffff inset;
+  box-shadow: 0 0 0px 1000px #ffffff inset;
+  -webkit-text-fill-color: #111827;
+  caret-color: #111827;
+}
+
+@media (prefers-color-scheme: dark) {
+  input, textarea, select {
+    background-color: #ffffff !important;
+    color: #111827 !important;
+    border-color: #d1d5db !important;
+  }
+  input::placeholder, textarea::placeholder { color: #9ca3af !important; }
+  input:-webkit-autofill,
+  textarea:-webkit-autofill,
+  select:-webkit-autofill {
+    -webkit-box-shadow: 0 0 0px 1000px #ffffff inset !important;
+    box-shadow: 0 0 0px 1000px #ffffff inset !important;
+    -webkit-text-fill-color: #111827 !important;
+  }
+}
+
+/* Force light form controls (final override) */
+html, body, #root, body * { color-scheme: light !important; }
+:where(input), :where(textarea), :where(select) {
+  background-color: #ffffff !important;
+  color: #111827 !important;
+  border-color: #d1d5db !important;
+}
+input::placeholder, textarea::placeholder { color: #9ca3af !important; opacity: 1 !important; }
+input::-ms-input-placeholder, textarea::-ms-input-placeholder { color: #9ca3af !important; }
+input::-webkit-input-placeholder, textarea::-webkit-input-placeholder { color: #9ca3af !important; }
+/* Improve select consistency */
+select { appearance: none; -webkit-appearance: none; -moz-appearance: none; background-color: #ffffff !important; }

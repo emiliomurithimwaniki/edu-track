@@ -717,6 +717,16 @@ class FeeCategoryViewSet(viewsets.ModelViewSet):
         school = getattr(getattr(self.request, 'user', None), 'school', None)
         serializer.save(school=school)
 
+    def destroy(self, request, *args, **kwargs):
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except Exception as e:
+            # Convert model-level protection errors into a user-friendly response
+            msg = str(e)
+            if 'Boarding fees' in msg or 'protected' in msg.lower():
+                return Response({'detail': "'Boarding fees' category cannot be deleted."}, status=400)
+            return Response({'detail': msg or 'Deletion failed'}, status=400)
+
 
 class ClassFeeViewSet(viewsets.ModelViewSet):
     queryset = ClassFee.objects.all()

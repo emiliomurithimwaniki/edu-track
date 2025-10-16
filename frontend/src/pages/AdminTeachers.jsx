@@ -28,7 +28,12 @@ export default function AdminTeachers(){
         api.get('/academics/classes/'),
         api.get('/auth/users/?role=teacher')
       ])
-      setTeachers(t.data); setClasses(cl.data); setUsers(u.data)
+      const tArr = Array.isArray(t.data) ? t.data : (Array.isArray(t.data?.results) ? t.data.results : [])
+      const clArr = Array.isArray(cl.data) ? cl.data : (Array.isArray(cl.data?.results) ? cl.data.results : [])
+      const uArr = Array.isArray(u.data) ? u.data : (Array.isArray(u.data?.results) ? u.data.results : [])
+      setTeachers(tArr)
+      setClasses(clArr)
+      setUsers(uArr)
     } catch (e) {
       showError('Failed to Load Teachers', 'There was a problem loading teachers data. Please refresh.')
     } finally {
@@ -59,7 +64,8 @@ export default function AdminTeachers(){
       const { data } = await api.post('/auth/users/create/', { ...newTeacher, role: 'teacher' })
       // refresh user list and preselect the newly created user
       const res = await api.get('/auth/users/?role=teacher')
-      setUsers(res.data)
+      const uArr = Array.isArray(res.data) ? res.data : (Array.isArray(res.data?.results) ? res.data.results : [])
+      setUsers(uArr)
       setForm(f => ({ ...f, user_id: data.id }))
       setNewTeacher({ username:'', password:'', first_name:'', last_name:'', email:'' })
       showSuccess('Teacher User Created', `Teacher user account for ${data.first_name} ${data.last_name} has been created successfully.`)

@@ -67,6 +67,31 @@ class ClassFeeSerializer(serializers.ModelSerializer):
         model = ClassFee
         fields = ['id','fee_category','fee_category_detail','klass','klass_detail','klasses','amount','year','term','due_date','created_at']
 
+    def validate(self, attrs):
+        # Enforce uniqueness (fee_category, klass, year, term) with a clear message
+        # Note: DB already has unique_together, but this provides a friendly 400 error
+        fee_category = attrs.get('fee_category') or getattr(self.instance, 'fee_category', None)
+        klass = attrs.get('klass') or getattr(self.instance, 'klass', None)
+        year = attrs.get('year') or getattr(self.instance, 'year', None)
+        term = attrs.get('term') or getattr(self.instance, 'term', None)
+        # Allow boarding-related categories to be assigned per class; enforcement is in signals to skip day scholars.
+        if fee_category and klass and year and term:
+            qs = ClassFee.objects.filter(
+                fee_category=fee_category,
+                klass=klass,
+                year=year,
+                term=term,
+            )
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError({
+                    'non_field_errors': [
+                        'This fee category is already assigned to the selected class for the specified academic year and term.'
+                    ]
+                })
+        return super().validate(attrs)
+
 class InvoiceSerializer(serializers.ModelSerializer):
     payments = PaymentSerializer(many=True, read_only=True)
     category_detail = FeeCategorySerializer(source='category', read_only=True)

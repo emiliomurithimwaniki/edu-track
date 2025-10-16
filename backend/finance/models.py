@@ -14,6 +14,18 @@ class FeeCategory(models.Model):
     def __str__(self):
         return f"{self.name}"
 
+    def delete(self, using=None, keep_parents=False):
+        # Prevent deletion of the system 'Boarding fees' category
+        try:
+            if str(self.name).strip().lower() == 'boarding fees':
+                from django.core.exceptions import ValidationError
+                raise ValidationError("'Boarding fees' category cannot be deleted.")
+        except Exception:
+            # If anything goes wrong, fall back to safe behavior and block deletion
+            from django.core.exceptions import ValidationError
+            raise ValidationError("This fee category is protected and cannot be deleted.")
+        return super().delete(using=using, keep_parents=keep_parents)
+
 class ClassFee(models.Model):
     """Assign a FeeCategory to a Class for a given academic year/term with an amount and due date."""
     TERM_CHOICES = (
@@ -23,7 +35,7 @@ class ClassFee(models.Model):
     )
     fee_category = models.ForeignKey(FeeCategory, on_delete=models.CASCADE, related_name='class_fees')
     klass = models.ForeignKey('academics.Class', on_delete=models.CASCADE, related_name='class_fees')
-    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     year = models.IntegerField()
     term = models.IntegerField(choices=TERM_CHOICES)
     due_date = models.DateField(null=True, blank=True)

@@ -257,14 +257,20 @@ class ExamViewSet(viewsets.ModelViewSet):
                     pass
 
         # When filtering by grade, use the persistent grade tag captured at exam creation
+        # Fallback: include exams where grade_level_tag is empty/null but the class's current grade_level matches.
         grade = self.request.query_params.get('grade')
         if grade:
             try:
                 from .models import Class as ClassModel
                 formatted = ClassModel.format_grade_level(grade)
-                qs = qs.filter(grade_level_tag=formatted)
             except Exception:
-                qs = qs.filter(grade_level_tag=grade)
+                formatted = grade
+            # Apply OR fallback when tag is missing
+            try:
+                missing_tag = Q(grade_level_tag__isnull=True) | Q(grade_level_tag="")
+                qs = qs.filter(Q(grade_level_tag=formatted) | (missing_tag & Q(klass__grade_level=formatted)))
+            except Exception:
+                qs = qs.filter(grade_level_tag=formatted)
         return qs
 
     @action(detail=False, methods=['get'], permission_classes=[IsTeacherOrAdmin], url_path='by-name')
@@ -1535,7 +1541,11 @@ class ExamResultViewSet(viewsets.ModelViewSet):
         # Scope for non-admins
         user = getattr(self.request, 'user', None)
         if user and getattr(user, 'role', None) == 'teacher' and not (user.is_staff or user.is_superuser):
-            qs = qs.filter(Q(exam__klass__teacher=user) | Q(exam__klass__subject_teachers__teacher=user)).distinct()
+            # Teachers can READ published results school-wide, but WRITE only within their classes (handled in perform_create, bulk, etc.)
+            if self.request.method in permissions.SAFE_METHODS:
+                qs = qs.filter(exam__published=True)
+            else:
+                qs = qs.filter(Q(exam__klass__teacher=user) | Q(exam__klass__subject_teachers__teacher=user)).distinct()
         # If requester is a student (not staff), only show published exams and their own results
         if getattr(user, 'role', None) == 'student' and not (user.is_staff or user.is_superuser):
             qs = qs.filter(exam__published=True, student__user=user)
@@ -2691,6 +2701,21 @@ class TeacherProfileViewSet(viewsets.ModelViewSet):
     queryset = TeacherProfile.objects.all()
     serializer_class = TeacherProfileSerializer
     permission_classes = [IsAdmin]
+
+    @action(detail=False, methods=['get'], permission_classes=[IsTeacherOrAdmin], url_path='mine')
+    def mine(self, request):
+        """Return the authenticated user's TeacherProfile.
+        - Teachers: read-only access to their profile.
+        - Admins: can also use this to quickly fetch their linked profile if any.
+        """
+        user = getattr(request, 'user', None)
+        if not user or not user.is_authenticated:
+            return Response({'detail': 'Authentication required'}, status=status.HTTP_401_UNAUTHORIZED)
+        prof = TeacherProfile.objects.filter(user=user).first()
+        if not prof:
+            return Response({'detail': 'Teacher profile not found'}, status=status.HTTP_404_NOT_FOUND)
+        ser = self.get_serializer(prof)
+        return Response(ser.data)
     def get_queryset(self):
         qs = super().get_queryset().select_related('user', 'klass')
         school = getattr(getattr(self.request, 'user', None), 'school', None)
@@ -2968,16 +2993,26 @@ class TimetablePlanViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], url_path='generate', permission_classes=[IsAdmin])
     def generate(self, request, pk=None):
         plan = self.get_object()
-        # Stub: wire to generator service later
-        # from .services.timetable_generator import generate
-        # result = generate(plan)
-        result = {
-            'version_id': None,
-            'placed_count': 0,
-            'unplaced': [],
-            'detail': 'Generator not yet implemented.'
-        }
-        return Response(result)
+        try:
+            from .services.timetable_generator import generate as generate_timetable
+        except Exception as e:
+            return Response({
+                'version_id': None,
+                'placed_count': 0,
+                'unplaced': [],
+                'detail': f'Generator unavailable: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        try:
+            result = generate_timetable(plan)
+            return Response(result, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({
+                'version_id': None,
+                'placed_count': 0,
+                'unplaced': [],
+                'detail': f'Generation failed: {str(e)}'
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class TimetableClassConfigViewSet(viewsets.ModelViewSet):

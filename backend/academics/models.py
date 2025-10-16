@@ -214,6 +214,7 @@ class TeacherProfile(models.Model):
     klass = models.ForeignKey(Class, null=True, blank=True, on_delete=models.SET_NULL)
     # Allows delegating timetable management to selected teachers
     can_manage_timetable = models.BooleanField(default=False, help_text="If true, this teacher can manage timetable data (create/update).")
+    tsc_number = models.CharField(max_length=50, null=True, blank=True, unique=True, help_text="T.S.C number")
 
 class Student(models.Model):
     admission_no = models.CharField(max_length=50, unique=True)
@@ -222,6 +223,9 @@ class Student(models.Model):
     gender = models.CharField(max_length=20)
     upi_number = models.CharField(max_length=50, blank=True)
     guardian_id = models.CharField(max_length=100, blank=True)
+    guardian_name = models.CharField(max_length=255, blank=True)
+    guardian_passport_no = models.CharField(max_length=50, blank=True)
+    birth_certificate_no = models.CharField(max_length=50, blank=True)
     klass = models.ForeignKey(Class, null=True, on_delete=models.SET_NULL)
     user = models.OneToOneField(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     # Keep school for scoping when klass is null (graduated)
@@ -235,6 +239,13 @@ class Student(models.Model):
     # Graduation status
     is_graduated = models.BooleanField(default=False)
     graduation_year = models.IntegerField(null=True, blank=True)
+    # Boarding status
+    boarding_status = models.CharField(
+        max_length=10,
+        choices=(('day', 'Day'), ('boarding', 'Boarding')),
+        default='day',
+        help_text='Whether the student is a day scholar or a boarder.'
+    )
 
 class Competency(models.Model):
     code = models.CharField(max_length=50, unique=True)

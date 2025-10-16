@@ -404,31 +404,22 @@ export default function AdminDashboard(){
 
               <div className="bg-white rounded-2xl shadow-card border border-gray-200 p-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-semibold text-gray-900">Events Calendar</h2>
-                  <div className="flex items-center gap-2">
+                  <h2 className="text-base sm:text-lg font-semibold text-gray-900">Events Calendar</h2>
+                  <div className="flex items-center gap-1.5 sm:gap-2">
                     <div className="hidden sm:block text-sm text-gray-600 mr-2">
                       {currentMonth.toLocaleString(undefined,{ month:'long', year:'numeric' })}
                     </div>
-                    <button onClick={()=>setViewMonth(prev=>{ const d=new Date(prev); d.setMonth(d.getMonth()-1); return d })} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" aria-label="Previous month">
-                      ‹
-                    </button>
-                    <button onClick={()=>setViewMonth(prev=>{ const d=new Date(prev); d.setMonth(d.getMonth()+1); return d })} className="p-2 rounded-lg border border-gray-200 hover:bg-gray-50" aria-label="Next month">
-                      ›
-                    </button>
-                    <button onClick={()=>setViewMonth(new Date())} className="px-2 py-1 text-xs rounded-full border border-gray-200 hover:bg-gray-50">Today</button>
-                    <button
-                      onClick={() => navigate('/admin/events')}
-                      className="text-blue-600 hover:text-blue-700 text-sm font-medium"
-                    >
-                      View All →
-                    </button>
+                    <button onClick={()=>setViewMonth(prev=>{ const d=new Date(prev); d.setMonth(d.getMonth()-1); return d })} className="p-2 sm:p-2.5 rounded-full border border-gray-200 hover:bg-gray-50" aria-label="Previous month">‹</button>
+                    <button onClick={()=>setViewMonth(prev=>{ const d=new Date(prev); d.setMonth(d.getMonth()+1); return d })} className="p-2 sm:p-2.5 rounded-full border border-gray-200 hover:bg-gray-50" aria-label="Next month">›</button>
+                    <button onClick={()=>setViewMonth(new Date())} className="px-2 py-1 text-[10px] sm:text-xs rounded-full border border-gray-200 hover:bg-gray-50">Today</button>
+                    <button onClick={() => navigate('/admin/events')} className="hidden xs:inline text-blue-600 hover:text-blue-700 text-sm font-medium">View All →</button>
                   </div>
                 </div>
 
                 {/* Modern Mini Calendar */}
                 <div className="space-y-3">
                   {/* Legend and Filters */}
-                  <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                  <div className="hidden sm:flex flex-wrap items-center gap-2 text-[11px]">
                     {/* Legend chips */}
                     <span className="px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">Students</span>
                     <span className="px-2 py-0.5 rounded-full border bg-purple-50 text-purple-700 border-purple-200">Teachers</span>
@@ -458,8 +449,8 @@ export default function AdminDashboard(){
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-7 text-[11px] font-semibold text-gray-500 mb-2">
-                    {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=> <div key={d} className="px-1 py-1 text-center tracking-wide">{d}</div>)}
+                  <div className="grid grid-cols-7 text-[10px] sm:text-[11px] font-semibold text-gray-500 mb-2">
+                    {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d=> <div key={d} className="px-0.5 sm:px-1 py-0.5 sm:py-1 text-center tracking-wide">{d}</div>)}
                   </div>
                   <div className="grid grid-cols-7 gap-1">
                     {monthDays.map((d,i)=>{
@@ -476,26 +467,26 @@ export default function AdminDashboard(){
                       if (color && dayEvents.length>0) tileBg = color.chip.split(' ').find(c=>c.startsWith('bg-')) || tileBg
                       if (holidayName) tileBg = 'bg-yellow-50'
                       return (
-                        <button type="button" onClick={()=>{ setDayModalKey(key); setDayModalEvents(dayEvents); setDayModalOpen(true) }} key={i} className={`text-left relative rounded-xl min-h-[68px] p-2 text-xs border ${holidayName? 'border-yellow-300' : (inMonth? 'border-gray-200':'border-gray-200/70')} ${tileBg} hover:border-brand-300 hover:shadow-soft transition-all`}> 
+                        <button type="button" onClick={()=>{ setDayModalKey(key); setDayModalEvents(dayEvents); setDayModalOpen(true) }} key={i} className={`text-left relative rounded-xl min-h-[56px] sm:min-h-[68px] p-1.5 sm:p-2 text-[10px] sm:text-xs border ${holidayName? 'border-yellow-300' : (inMonth? 'border-gray-200':'border-gray-200/70')} ${tileBg} hover:border-brand-300 transition-all`}> 
                           <div className="flex items-center justify-between">
-                            <div className={`${inMonth? 'text-gray-800':'text-gray-400'} text-[11px] font-semibold`}>{d.getDate()}</div>
+                            <div className={`${inMonth? 'text-gray-800':'text-gray-400'} text-[10px] sm:text-[11px] font-semibold`}>{d.getDate()}</div>
                             <div className="flex items-center gap-1">
-                              {holidayName && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-800 border border-yellow-200" title={holidayName}>Holiday</span>}
-                              {isToday && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-700 border border-brand-200">Today</span>}
+                              {holidayName && <span className="hidden sm:inline text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-100 text-yellow-800 border border-yellow-200" title={holidayName}>Holiday</span>}
+                              {isToday && <span className="text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-full bg-brand-50 text-brand-700 border border-brand-200">Today</span>}
                             </div>
                           </div>
                           <div className="mt-1 flex flex-wrap gap-1">
-                            {dayEvents.slice(0,3).map(ev => {
+                            {dayEvents.slice(0,2).map(ev => {
                               const c = colorForEvent(ev)
                               return (
-                              <span key={ev.id} className={`px-1.5 py-0.5 rounded-full text-[10px] border truncate max-w-full ${c.chip}`} title={ev.title}>
+                              <span key={ev.id} className={`px-1.5 py-0.5 rounded-full text-[9px] sm:text-[10px] border truncate max-w-full ${c.chip}`} title={ev.title}>
                                 {ev.title}
                               </span>)
                             })}
-                            {dayEvents.length>3 && <span className="text-[10px] text-gray-500">+{dayEvents.length-3} more</span>}
+                            {dayEvents.length>2 && <span className="text-[9px] sm:text-[10px] text-gray-500">+{dayEvents.length-2} more</span>}
                           </div>
                           {dayEvents.length>0 && (
-                            <div className="absolute bottom-1 right-2 inline-flex items-center gap-1 text-[10px] text-gray-500">
+                            <div className="absolute bottom-1 right-2 inline-flex items-center gap-1 text-[9px] sm:text-[10px] text-gray-500">
                               <span className={`w-1.5 h-1.5 rounded-full ${color?.dot || 'bg-blue-500'}`} />
                               {dayEvents.length}
                             </div>
