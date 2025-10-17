@@ -171,8 +171,8 @@ REST_FRAMEWORK = {
         'django_filters.rest_framework.DjangoFilterBackend',
     ),
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
-    # Pagination to prevent huge payloads on list endpoints
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    # Pagination: allow clients to request larger page sizes while defaulting to 50
+    'DEFAULT_PAGINATION_CLASS': 'edutrack.pagination.CustomPageNumberPagination',
     'PAGE_SIZE': 50,
 }
 

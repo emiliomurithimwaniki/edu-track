@@ -37,13 +37,22 @@ export default function AdminAcademicCalendar(){
         api.get('/academics/terms/current/'),
         api.get('/academics/terms/of-current-year/'),
       ])
-      if (yearsRes.status === 'fulfilled') setYears(yearsRes.value.data)
+      if (yearsRes.status === 'fulfilled') {
+        const y = yearsRes.value?.data
+        setYears(Array.isArray(y) ? y : (y?.results || []))
+      } else {
+        setYears([])
+      }
       if (cyRes.status === 'fulfilled') setCurrentYear(cyRes.value.data)
       else setCurrentYear(null)
       if (ctRes.status === 'fulfilled') setCurrentTerm(ctRes.value.data)
       else setCurrentTerm(null)
-      if (termsRes.status === 'fulfilled') setTerms(termsRes.value.data)
-      else setTerms([])
+      if (termsRes.status === 'fulfilled') {
+        const t = termsRes.value?.data
+        setTerms(Array.isArray(t) ? t : (t?.results || []))
+      } else {
+        setTerms([])
+      }
     } catch (e) {
       setError(e?.response?.data ? JSON.stringify(e.response.data) : e.message)
     } finally {
@@ -246,7 +255,7 @@ export default function AdminAcademicCalendar(){
             <div className="mt-3">
               <div className="text-xs text-gray-500 mb-1">All Academic Years</div>
               <div className="divide-y border rounded">
-                {years.map(y => (
+                {(Array.isArray(years) ? years : []).map(y => (
                   <div key={y.id} className="p-2 flex items-center justify-between">
                     <div className="min-w-0">
                       <div className="font-medium text-sm truncate">{y.label}</div>
@@ -266,7 +275,7 @@ export default function AdminAcademicCalendar(){
                     </div>
                   </div>
                 ))}
-                {years.length===0 && <div className="p-3 text-xs text-gray-500">No academic years yet.</div>}
+                {(Array.isArray(years) ? years : []).length===0 && <div className="p-3 text-xs text-gray-500">No academic years yet.</div>}
               </div>
             </div>
           </div>
@@ -281,7 +290,7 @@ export default function AdminAcademicCalendar(){
                 <label className="text-sm text-gray-700">Academic Year</label>
                 <select className="border p-2 rounded w-full" value={termForm.academic_year} onChange={e=>setTermForm({...termForm, academic_year:e.target.value})} required>
                   <option value="">Select year</option>
-                  {years.map(y => (
+                  {(Array.isArray(years) ? years : []).map(y => (
                     <option key={y.id} value={y.id}>{y.label}</option>
                   ))}
                 </select>
@@ -327,7 +336,7 @@ export default function AdminAcademicCalendar(){
               )}
             </div>
             <div className="divide-y border rounded mt-2">
-              {terms.map(t => (
+              {(Array.isArray(terms) ? terms : []).map(t => (
                 <div key={t.id} className="p-2 flex items-center justify-between">
                   <div className="min-w-0">
                     <div className="font-medium text-sm truncate">T{t.number} {t.name || ''}</div>
@@ -344,7 +353,7 @@ export default function AdminAcademicCalendar(){
                   </div>
                 </div>
               ))}
-              {terms.length===0 && (
+              {(Array.isArray(terms) ? terms : []).length===0 && (
                 <div className="p-3 text-xs text-gray-500">No terms yet for the current year.</div>
               )}
             </div>

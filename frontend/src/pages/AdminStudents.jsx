@@ -30,8 +30,8 @@ export default function AdminStudents(){
     try {
       setIsLoading(true)
       const [st, cl] = await Promise.all([
-        api.get(`/academics/students/?is_graduated=${tab === 'graduated' ? 'true' : 'false'}`),
-        api.get('/academics/classes/')
+        api.get(`/academics/students/?is_graduated=${tab === 'graduated' ? 'true' : 'false'}&page_size=2000`),
+        api.get('/academics/classes/?page_size=2000')
       ])
       const stData = Array.isArray(st.data) ? st.data : (Array.isArray(st.data?.results) ? st.data.results : [])
       const clData = Array.isArray(cl.data) ? cl.data : (Array.isArray(cl.data?.results) ? cl.data.results : [])
